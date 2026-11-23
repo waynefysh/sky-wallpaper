@@ -449,10 +449,20 @@ struct SkyPainter {
         let lowWarmth = max(0, min(1, 1 - m.horizontal.altitude / 10))
         let lit = SkyColor.mix(SkyColor(0.97, 0.96, 0.92), SkyColor(1.0, 0.80, 0.55), lowWarmth)
 
-        let halo = r * 6
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: halo * 2, height: halo * 2)),
-                 with: .radialGradient(Gradient(colors: [color(lit, 0.28 * k * visible * (1 - daylight)), color(lit, 0)]),
-                                       center: p, startRadius: r, endRadius: halo))
+        // A soft glow that falls away quickly from the limb, added as light, rather than a wide
+        // grey disc. Haze or thin cloud spread it a little further.
+        let haze = min(1, overcast * 1.5 + fogginessForMoon)
+        let halo = r * (4 + 3 * haze)
+        let a = (0.10 + 0.06 * haze) * k * visible * (1 - daylight)
+        var glow = ctx
+        glow.blendMode = .plusLighter
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: halo * 2, height: halo * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(lit, a), location: 0),
+                      .init(color: color(lit, a * 0.45), location: 0.3),
+                      .init(color: color(lit, a * 0.12), location: 0.6),
+                      .init(color: color(lit, 0), location: 1),
+                  ]), center: p, startRadius: r, endRadius: halo))
         if let moonImage {
             // Real surface, lit for the phase; warmer near the horizon.
             let img = Image(decorative: moonImage, scale: 1).interpolation(.high).resizable()
@@ -576,6 +586,8 @@ struct SkyPainter {
             .init(color: color(core, 0), location: 1),
         ]), center: p, startRadius: 0, endRadius: r))
     }
+
+    private var fogginessForMoon: Double { fogginess * 0.5 }
 
     /// How thick the cloud deck is, 0 (none or broken) ... 1 (a dark rain or storm deck).
     var cloudThickness: Double {
