@@ -27,6 +27,8 @@ Your own wallpaper is put back when Sky quits.
 
 ![London, 21 June 2026, through the day](Docs/london-midsummer-day.png)
 
+![London at night: Milky Way on 12 August, full Moon on 23 November 2026](Docs/london-night-sky.png)
+
 ## Layout
 
 | Path | What it is |
@@ -36,6 +38,8 @@ Your own wallpaper is put back when Sky quits.
 | `Sources/SkyCore/StarCatalog.swift` | Bundled Bright Star Catalogue, precession from J2000, star colours |
 | `Sources/SkyCore/Weather.swift` | `WeatherProvider` protocol, Open-Meteo client, caching `WeatherService` |
 | `Sources/SkyCore/Atmosphere.swift` | Preetham daylight sky model, screen projection, low-res sky background renderer |
+| `Sources/SkyCore/Moon.swift` | Moon position (Meeus ch. 47) and phase (ch. 48) |
+| `Sources/SkyCore/Planets.swift` | Mercury to Saturn from JPL Keplerian elements; galactic coordinates and Milky Way brightness |
 | `Sources/SkyCore/SkyScene.swift` | Combines sun, stars and weather into one frame's scene and sky colours |
 | `Sources/SkyWallpaper/` | The app: live desktop windows, still-image wallpaper mode, renderer, settings |
 | `Scripts/build_star_catalog.py` | Regenerates `Resources/bsc5.csv` from the catalogue JSON |
@@ -58,7 +62,7 @@ Weather: [Open-Meteo](https://open-meteo.com/), free for non-commercial use (CC 
 
 1. Scaffold, astronomy and weather model (this commit)
 2. Daytime sky: Preetham scattering model, sun disc, display modes (merged)
-3. Seasonal view width: wide enough to show sunrise and sunset all year (this branch)
-4. Night sky: Moon with phase, planets, Milky Way
+3. Seasonal view width: wide enough to show sunrise and sunset all year (merged)
+4. Night sky: Moon with phase, planets, Milky Way, twilight on the Sun's side (this branch)
 5. Weather in Metal: volumetric-looking cloud layers lit by the Sun, rain on glass, fog, lightning
 6. Multi-display, power saving, launch at login, still-image mode

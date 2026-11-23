@@ -41,6 +41,9 @@ public struct SkyScene: Sendable {
     /// How visible the stars are (0 in daylight, 1 in full darkness), before cloud.
     public var starVisibility: Double
     public var stars: [VisibleStar]
+    public var moon: MoonState
+    /// Naked-eye planets (all five, including those below the horizon), filled with the stars.
+    public var planets: [PlanetState]
     public var weather: WeatherConditions
 }
 
@@ -71,7 +74,10 @@ public struct SkySceneBuilder: Sendable {
             date: date, observer: observer, sun: sun, phase: SkyPhase(sunAltitude: h),
             zenithColor: zenith, horizonColor: horizon,
             sunGlow: max(0, 1 - abs(h + 2) / 10),
-            starVisibility: starVis, stars: stars, weather: weather)
+            starVisibility: starVis, stars: stars,
+            moon: MoonCalculator.state(observer: observer, at: date),
+            planets: includeStars ? PlanetCalculator.states(observer: observer, at: date) : [],
+            weather: weather)
     }
 
     /// Keyframed sky colours by solar altitude. A first pass; the Metal shader can replace it
