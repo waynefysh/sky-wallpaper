@@ -209,6 +209,24 @@ final class RainbowTests: XCTestCase {
         XCTAssertLessThan(Rainbow.light(atAngle: 46).0, 0.05)
     }
 
+    func testSecondaryBowIsOftenMissingAndFaint() {
+        let showers = WeatherConditions.sample(.showers)
+        let start = Date(timeIntervalSince1970: 1_795_392_000)
+        let values = (0..<200).map {
+            Rainbow.secondaryStrength(weather: showers, sunAltitude: 15, date: start.addingTimeInterval(Double($0) * 1800))
+        }
+        let none = Double(values.filter { $0 == 0 }.count) / Double(values.count)
+        XCTAssertGreaterThan(none, 0.35)
+        XCTAssertLessThan(none, 0.85)
+        XCTAssertLessThanOrEqual(values.max() ?? 1, 0.3)
+        // Steady within a shower: the same answer ten minutes later.
+        let a = Rainbow.secondaryStrength(weather: showers, sunAltitude: 15, date: start.addingTimeInterval(60))
+        let b = Rainbow.secondaryStrength(weather: showers, sunAltitude: 15, date: start.addingTimeInterval(660))
+        XCTAssertEqual(a, b)
+        // With no secondary bow, nothing is drawn outside the primary.
+        XCTAssertLessThan(Rainbow.light(atAngle: 51.5, secondary: 0).0, 0.01)
+    }
+
     func testNeedsSunAndShowers() {
         let showers = WeatherConditions.sample(.showers)
         XCTAssertGreaterThan(Rainbow.strength(weather: showers, sunAltitude: 15), 0.5)
