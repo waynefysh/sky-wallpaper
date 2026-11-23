@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var latitude = ""
     @State private var longitude = ""
     @State private var dockAllowed = DockLocator.isTrusted
+    @State private var opensAtLogin = LaunchAtLogin.isEnabled
+    @State private var loginNote: String?
 
     var body: some View {
         Form {
@@ -45,6 +47,16 @@ struct SettingsView: View {
                     Text("30 fps").tag(30.0)
                     Text("60 fps").tag(60.0)
                 }
+                Toggle("Open Sky when you log in", isOn: Binding(
+                    get: { opensAtLogin },
+                    set: { on in
+                        loginNote = LaunchAtLogin.set(on)
+                        opensAtLogin = LaunchAtLogin.isEnabled
+                    }))
+                    .disabled(!LaunchAtLogin.isAvailable)
+                if let note = loginNote ?? (LaunchAtLogin.isAvailable ? nil : "Available in the packaged app.") {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Weather") {
                 Picker("Rain drops on the glass", selection: $model.glassMode) {
@@ -52,8 +64,10 @@ struct SettingsView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
-                Toggle("Rain and snow on the Dock", isOn: $model.dockEffects)
-                if model.dockEffects && !dockAllowed {
+                if DockLocator.isSupported {
+                    Toggle("Rain and snow on the Dock", isOn: $model.dockEffects)
+                }
+                if DockLocator.isSupported && model.dockEffects && !dockAllowed {
                     Text("To find the Dock, Sky needs Accessibility access. Until then, snow settles along the bottom of the screen only.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Allow Accessibility access…") {

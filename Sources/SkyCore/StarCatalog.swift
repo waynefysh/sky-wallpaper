@@ -33,7 +33,7 @@ public final class StarCatalog: @unchecked Sendable {
 
     /// Loads the catalogue shipped in the SkyCore bundle.
     public static func bundled() throws -> StarCatalog {
-        guard let url = Bundle.module.url(forResource: "bsc5", withExtension: "csv") else {
+        guard let url = BundledResources.url(forResource: "bsc5", withExtension: "csv") else {
             throw CocoaError(.fileNoSuchFile)
         }
         return try StarCatalog(csv: String(contentsOf: url, encoding: .utf8))

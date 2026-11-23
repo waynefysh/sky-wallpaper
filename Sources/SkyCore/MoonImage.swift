@@ -35,7 +35,7 @@ public struct RGBAImage: Sendable {
 
 public enum MoonSurface {
     /// NASA LRO colour map bundled with SkyCore (public domain, NASA SVS 4720).
-    public static var bundledMapURL: URL? { Bundle.module.url(forResource: "moon", withExtension: "jpg") }
+    public static var bundledMapURL: URL? { BundledResources.url(forResource: "moon", withExtension: "jpg") }
 }
 
 /// Renders the Moon as a lit sphere from an equirectangular surface map (longitude −180…180

@@ -19,6 +19,19 @@ swift run SkyWallpaper     # launches the menu bar app and the desktop sky
 Or open `Package.swift` in Xcode and run the `SkyWallpaper` scheme. Use the sun-and-horizon
 menu bar icon to open Settings, set your coordinates, and scrub through the day or the seasons.
 
+## Packaging
+
+`Scripts/package.sh` builds `dist/Sky.app` (menu bar only, with its icon and a
+"Open Sky when you log in" setting) and wraps it in a disk image. It makes three kinds of build:
+
+| Build | Command | Notes |
+|---|---|---|
+| Personal | `Scripts/package.sh` | Signed ad hoc. Right-click > Open the first time. Accessibility access must be granted again after each rebuild. |
+| Developer ID | `SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=sky Scripts/package.sh` | Signed and notarised DMG that opens normally on any Mac. Use it to sell or share directly. |
+| Mac App Store | `APP_STORE=1 TEAM_ID=… SIGN_ID="Apple Distribution: …" INSTALLER_ID="3rd Party Mac Developer Installer: …" PROFILE=… Scripts/package.sh` | Sandboxed `.pkg` for Transporter. Built with `-D APP_STORE`, which leaves out the Dock effects (a sandboxed app can't use Accessibility to find the Dock). |
+
+The script header lists every setting. `Scripts/make_icon.py` redraws `Resources/AppIcon.png`.
+
 ## Display modes
 
 Choose in Settings: **Live sky** (default, animated window behind the icons), **Still image**
@@ -71,6 +84,7 @@ on a click-through window just above the Dock, so clicks still reach it.
 | `Sources/SkyCore/Lightning.swift` | Flash timing and forked bolt shapes |
 | `Sources/SkyCore/SkyScene.swift` | Combines sun, stars and weather into one frame's scene and sky colours |
 | `Sources/SkyWallpaper/` | The app: live desktop windows, still-image wallpaper mode, renderer, settings |
+| `Scripts/package.sh` | Builds the .app, DMG or App Store package |
 | `Scripts/build_star_catalog.py` | Regenerates `Resources/bsc5.csv` from the catalogue JSON |
 
 ## Accuracy
