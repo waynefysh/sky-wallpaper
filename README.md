@@ -57,7 +57,8 @@ Weather: [Open-Meteo](https://open-meteo.com/), free for non-commercial use (CC 
 ## Roadmap
 
 1. Scaffold, astronomy and weather model (this commit)
-2. Daytime sky: Preetham scattering model, sun disc, display modes (this branch)
-3. Night sky: Moon with phase, planets, Milky Way
-4. Weather in Metal: volumetric-looking cloud layers lit by the Sun, rain on glass, fog, lightning
-5. Multi-display, power saving, launch at login, still-image mode
+2. Daytime sky: Preetham scattering model, sun disc, display modes (merged)
+3. Seasonal view width: wide enough to show sunrise and sunset all year (this branch)
+4. Night sky: Moon with phase, planets, Milky Way
+5. Weather in Metal: volumetric-looking cloud layers lit by the Sun, rain on glass, fog, lightning
+6. Multi-display, power saving, launch at login, still-image mode

@@ -45,9 +45,11 @@ final class StillWallpaperController {
         let date = model.now
         let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
         let scene = builder.scene(at: date, weather: model.weather, includeStars: true)
+        let fov = SkyProjection.seasonalFieldOfView(observer: model.observer, date: date)
         for (index, screen) in NSScreen.screens.enumerated() {
             let size = screen.frame.size
-            let view = StillSkyView(scene: scene, background: SkyBackground.image(scene: scene, size: size))
+            let view = StillSkyView(scene: scene, fov: fov,
+                                    background: SkyBackground.image(scene: scene, size: size, fov: fov))
                 .frame(width: size.width, height: size.height)
             let renderer = ImageRenderer(content: view)
             renderer.scale = screen.backingScaleFactor

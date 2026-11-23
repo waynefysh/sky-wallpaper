@@ -13,9 +13,10 @@ struct SkyView: View {
             Canvas { ctx, size in
                 let date = timeline.date.addingTimeInterval(model.previewOffset)
                 let scene = caches.scene(model: model, date: date)
-                let background = caches.background(scene: scene, size: size)
+                let fov = caches.fieldOfView(scene: scene)
+                let background = caches.background(scene: scene, size: size, fov: fov)
                 SkyPainter(scene: scene, size: size, time: timeline.date.timeIntervalSinceReferenceDate,
-                           background: background).paint(&ctx)
+                           fov: fov, background: background).paint(&ctx)
             }
         }
         .ignoresSafeArea()
@@ -25,11 +26,12 @@ struct SkyView: View {
 /// One frozen frame of the sky, used for still-image wallpaper mode.
 struct StillSkyView: View {
     let scene: SkyScene
+    let fov: Double
     let background: CGImage?
 
     var body: some View {
         Canvas { ctx, size in
-            SkyPainter(scene: scene, size: size, time: 0, background: background).paint(&ctx)
+            SkyPainter(scene: scene, size: size, time: 0, fov: fov, background: background).paint(&ctx)
         }
     }
 }
@@ -42,6 +44,17 @@ final class SkyCaches {
     private var stars: [VisibleStar] = []
     private var backgroundKey: (date: Date, size: CGSize, observer: Observer, weather: WeatherConditions)?
     private var backgroundImage: CGImage?
+    private var fovKey: (day: Date, observer: Observer)?
+    private var fov: Double = 140
+
+    /// Field of view for the scene's day, recomputed once per local day or when the location changes.
+    func fieldOfView(scene: SkyScene) -> Double {
+        let day = Calendar.current.startOfDay(for: scene.date)
+        if let k = fovKey, k.day == day, k.observer == scene.observer { return fov }
+        fov = SkyProjection.seasonalFieldOfView(observer: scene.observer, date: scene.date)
+        fovKey = (day, scene.observer)
+        return fov
+    }
 
     func scene(model: SkyModel, date: Date) -> SkyScene {
         let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
@@ -54,12 +67,12 @@ final class SkyCaches {
         return scene
     }
 
-    func background(scene: SkyScene, size: CGSize) -> CGImage? {
+    func background(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
         if let k = backgroundKey, abs(scene.date.timeIntervalSince(k.date)) < 2, k.size == size,
            k.observer == scene.observer, k.weather == scene.weather, let img = backgroundImage {
             return img
         }
-        backgroundImage = SkyBackground.image(scene: scene, size: size)
+        backgroundImage = SkyBackground.image(scene: scene, size: size, fov: fov)
         backgroundKey = (scene.date, size, scene.observer, scene.weather)
         return backgroundImage
     }
@@ -68,14 +81,15 @@ final class SkyCaches {
 enum SkyBackground {
     static let resolution = (width: 128, height: 80)
 
-    static func projection(for scene: SkyScene, size: CGSize) -> SkyProjection {
+    static func projection(for scene: SkyScene, size: CGSize, fov: Double) -> SkyProjection {
         SkyProjection(width: size.width, height: size.height,
-                      facingAzimuth: scene.observer.latitude >= 0 ? 180 : 0)
+                      facingAzimuth: SkyProjection.equatorFacingAzimuth(for: scene.observer),
+                      horizontalFOV: fov)
     }
 
-    static func image(scene: SkyScene, size: CGSize) -> CGImage? {
+    static func image(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
         let (w, h) = resolution
-        let bytes = SkyGradientRenderer().render(scene: scene, projection: projection(for: scene, size: size),
+        let bytes = SkyGradientRenderer().render(scene: scene, projection: projection(for: scene, size: size, fov: fov),
                                                  width: w, height: h)
         guard let provider = CGDataProvider(data: Data(bytes) as CFData),
               let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
@@ -89,9 +103,10 @@ struct SkyPainter {
     let scene: SkyScene
     let size: CGSize
     let time: TimeInterval
+    let fov: Double
     let background: CGImage?
 
-    private var projection: SkyProjection { SkyBackground.projection(for: scene, size: size) }
+    private var projection: SkyProjection { SkyBackground.projection(for: scene, size: size, fov: fov) }
     private var overcast: Double {
         max(scene.weather.cloudLow, scene.weather.cloudMid * 0.8, scene.weather.cloudHigh * 0.4)
     }
