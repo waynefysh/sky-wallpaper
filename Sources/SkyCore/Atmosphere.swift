@@ -180,12 +180,41 @@ public struct SkyGradientRenderer: Sendable {
         var out = [UInt8](repeating: 255, count: width * height * 4)
         let sx = projection.width / Double(width), sy = projection.height / Double(height)
 
+        // Night extras: the Milky Way (when dark and clear) and moonlight brightening the sky.
+        let cloud = max(scene.weather.cloudLow, scene.weather.cloudMid * 0.8, scene.weather.cloudHigh * 0.4)
+        let moonUp = scene.moon.horizontal.altitude > 0
+        let moonlight = moonUp ? scene.moon.illuminatedFraction * smoothstep(0, 20, scene.moon.horizontal.altitude)
+            * (1 - smoothstep(-8, -2, sunAlt)) : 0
+        let milkyWay = scene.starVisibility * scene.starVisibility * (1 - cloud) * (1 - 0.7 * moonlight)
+        let jd = AstroMath.julianDay(scene.date)
+        let lst = AstroMath.normalize(AstroMath.greenwichMeanSiderealTime(jd: jd) + scene.observer.longitude)
+        let lat = scene.observer.latitude
+        // Twilight colours sit on the Sun's side; the opposite horizon stays nearer the zenith colour.
+        let awayHorizon = SkyColor.mix(scene.zenithColor, scene.horizonColor, 0.4)
+
         for j in 0..<height {
             for i in 0..<width {
                 let dir = projection.direction(x: (Double(i) + 0.5) * sx, y: (Double(j) + 0.5) * sy)
                 let alt = max(dir.altitude, 0)
-                // Twilight/night keyframes: zenith colour high up, horizon colour low down.
-                var c = SkyColor.mix(scene.horizonColor, scene.zenithColor, smoothstep(0, 55, alt))
+                let fromSun = abs(AstroMath.normalizeSigned(dir.azimuth - sunAz))
+                let horizon = SkyColor.mix(scene.horizonColor, awayHorizon, smoothstep(50, 160, fromSun))
+                var c = SkyColor.mix(horizon, scene.zenithColor, smoothstep(0, 55, alt))
+                if moonlight > 0 {
+                    c = SkyColor.mix(c, SkyColor(0.10, 0.16, 0.30), 0.35 * moonlight)
+                }
+                if milkyWay > 0.01, dir.altitude > 0 {
+                    // Horizontal -> equatorial (of date; precession is invisible at this scale) -> galactic.
+                    let sinDec = AstroMath.sind(alt) * AstroMath.sind(lat)
+                        + AstroMath.cosd(alt) * AstroMath.cosd(lat) * AstroMath.cosd(dir.azimuth)
+                    let dec = AstroMath.asind(max(-1, min(1, sinDec)))
+                    let ha = AstroMath.atan2d(-AstroMath.sind(dir.azimuth) * AstroMath.cosd(alt),
+                                              AstroMath.sind(alt) * AstroMath.cosd(lat)
+                                                - AstroMath.cosd(alt) * AstroMath.sind(lat) * AstroMath.cosd(dir.azimuth))
+                    let g = Galactic.fromEquatorial(rightAscension: AstroMath.normalize(lst - ha), declination: dec)
+                    let v = Galactic.milkyWayBrightness(longitude: g.longitude, latitude: g.latitude)
+                        * milkyWay * smoothstep(0, 25, alt) * 0.16
+                    c = SkyColor(c.r + v * 0.95, c.g + v * 0.97, c.b + v)
+                }
                 if dayWeight > 0 {
                     let v = unitVector(altitude: alt, azimuth: dir.azimuth)
                     let cosG = max(-1, min(1, v.0 * sun.0 + v.1 * sun.1 + v.2 * sun.2))

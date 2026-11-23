@@ -211,3 +211,39 @@ final class FieldOfViewTests: XCTestCase {
         XCTAssertEqual(SkyProjection.seasonalFieldOfView(observer: tromso, date: utc(2026, 6, 21), timeZone: utcZone), 300)
     }
 }
+
+final class NightSkyTests: XCTestCase {
+    /// Meeus example 47.a: 1992 Apr 12.0 TD, apparent RA 134.688470°, Dec 13.768368°, distance 368409.7 km.
+    func testMoonPositionMeeus47a() {
+        let m = MoonCalculator.apparentEquatorial(jd: 2_448_724.5)
+        XCTAssertEqual(m.rightAscension, 134.688470, accuracy: 0.01)
+        XCTAssertEqual(m.declination, 13.768368, accuracy: 0.01)
+        XCTAssertEqual(m.distance, 368_409.7, accuracy: 50)
+    }
+
+    /// Meeus example 48.a: same instant, illuminated fraction 0.6786, phase angle 69.0756°.
+    func testMoonPhaseMeeus48a() {
+        let s = MoonCalculator.state(observer: Observer(latitude: 0, longitude: 0),
+                                     at: AstroMath.date(fromJulianDay: 2_448_724.5))
+        XCTAssertEqual(s.illuminatedFraction, 0.6786, accuracy: 0.002)
+        XCTAssertEqual(s.phaseAngle, 69.0756, accuracy: 0.1)
+        XCTAssertTrue(s.isWaxing)
+    }
+
+    /// Meeus example 33.a: Venus on 1992 Dec 20.0 TD at RA 21h 04m 41.454s, Dec −18° 53′ 16.84″.
+    func testVenusMeeus33a() {
+        let v = PlanetCalculator.equatorial(.venus, jd: 2_448_976.5)
+        XCTAssertEqual(v.rightAscension, 316.172725, accuracy: 0.02)
+        XCTAssertEqual(v.declination, -18.888011, accuracy: 0.02)
+        XCTAssertEqual(v.distance, 0.911, accuracy: 0.002)
+    }
+
+    func testGalacticCentre() {
+        let g = Galactic.fromEquatorial(rightAscension: 266.40510, declination: -28.936175) // Sgr A*
+        XCTAssertEqual(AstroMath.normalizeSigned(g.longitude), 0, accuracy: 0.01)
+        XCTAssertEqual(g.latitude, 0, accuracy: 0.01)
+        XCTAssertGreaterThan(Galactic.milkyWayBrightness(longitude: 0, latitude: 0),
+                             Galactic.milkyWayBrightness(longitude: 180, latitude: 0))
+        XCTAssertLessThan(Galactic.milkyWayBrightness(longitude: 0, latitude: 40), 0.05)
+    }
+}

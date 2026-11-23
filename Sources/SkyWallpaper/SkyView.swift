@@ -42,6 +42,7 @@ struct StillSkyView: View {
 final class SkyCaches {
     private var starsAt: Date = .distantPast
     private var stars: [VisibleStar] = []
+    private var planets: [PlanetState] = []
     private var backgroundKey: (date: Date, size: CGSize, observer: Observer, weather: WeatherConditions)?
     private var backgroundImage: CGImage?
     private var fovKey: (day: Date, observer: Observer)?
@@ -60,10 +61,13 @@ final class SkyCaches {
         let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
         var scene = builder.scene(at: date, weather: model.weather, includeStars: false)
         if abs(date.timeIntervalSince(starsAt)) > 5 {
-            stars = builder.scene(at: date, weather: model.weather, includeStars: true).stars
+            let full = builder.scene(at: date, weather: model.weather, includeStars: true)
+            stars = full.stars
+            planets = full.planets
             starsAt = date
         }
         scene.stars = stars
+        scene.planets = planets
         return scene
     }
 
@@ -118,7 +122,9 @@ struct SkyPainter {
     func paint(_ ctx: inout GraphicsContext) {
         paintBackground(&ctx)
         paintStars(&ctx)
+        paintPlanets(&ctx)
         paintSun(&ctx)
+        paintMoon(&ctx)
         paintClouds(&ctx)
         paintPrecipitation(&ctx)
         paintLightning(&ctx)
@@ -158,6 +164,73 @@ struct SkyPainter {
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
                      with: .color(Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: alpha)))
         }
+    }
+
+    /// Planets: steady (no twinkle), slightly larger than stars of the same brightness,
+    /// and showing earlier in twilight, so Venus can be the "evening star".
+    private func paintPlanets(_ ctx: inout GraphicsContext) {
+        let fade = min(1, scene.starVisibility * 1.8) * (1 - overcast)
+        guard fade > 0.01 else { return }
+        for pl in scene.planets where pl.horizontal.altitude > -0.5 {
+            guard let p = point(pl.horizontal) else { continue }
+            let radius = max(1.2, 3.4 - 0.45 * pl.magnitude)
+            let c = pl.planet.color
+            let glow = radius * 3
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - glow, y: p.y - glow, width: glow * 2, height: glow * 2)),
+                     with: .radialGradient(Gradient(colors: [color(c, 0.35 * fade), color(c, 0)]),
+                                           center: p, startRadius: 0, endRadius: glow))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
+                     with: .color(color(c, fade)))
+        }
+    }
+
+    /// Screen position without the off-screen cut-off, used for directions (e.g. towards the Sun).
+    private func unclampedPoint(_ h: HorizontalCoordinates) -> CGPoint {
+        let pr = projection
+        let dAz = AstroMath.normalizeSigned(h.azimuth - pr.facingAzimuth)
+        return CGPoint(x: (dAz / pr.horizontalFOV + 0.5) * size.width,
+                       y: (1 - (h.altitude - pr.lowestAltitude) / (pr.highestAltitude - pr.lowestAltitude)) * size.height)
+    }
+
+    /// The Moon with its real phase, the lit side turned towards the Sun, a faint earthshine
+    /// on the dark side at night, and a halo when it is bright.
+    private func paintMoon(_ ctx: inout GraphicsContext) {
+        let m = scene.moon
+        guard m.horizontal.altitude > -1, let p = point(m.horizontal) else { return }
+        let r = size.width * 0.010
+        let k = m.illuminatedFraction
+        let daylight = max(0, min(1, (scene.sun.horizontal.altitude + 4) / 10))
+        let visible = (1 - overcast * 0.95) * (1 - 0.55 * daylight)
+        guard visible > 0.02 else { return }
+        let lowWarmth = max(0, min(1, 1 - m.horizontal.altitude / 10))
+        let lit = SkyColor.mix(SkyColor(0.97, 0.96, 0.92), SkyColor(1.0, 0.80, 0.55), lowWarmth)
+
+        let halo = r * 6
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: halo * 2, height: halo * 2)),
+                 with: .radialGradient(Gradient(colors: [color(lit, 0.28 * k * visible * (1 - daylight)), color(lit, 0)]),
+                                       center: p, startRadius: r, endRadius: halo))
+        // Dark side: earthshine at night, sky colour by day.
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
+                 with: .color(color(SkyColor(0.30, 0.33, 0.40), 0.18 * visible * (1 - daylight))))
+
+        // Lit part in Moon-centred coordinates with +x towards the Sun: the bright limb is a
+        // semicircle, the terminator a half-ellipse whose width follows the phase.
+        let s = unclampedPoint(scene.sun.horizontal)
+        let angle = atan2(s.y - p.y, s.x - p.x)
+        let e = r * (1 - 2 * k)
+        var shape = Path()
+        for deg in stride(from: -90.0, through: 90.0, by: 6) {
+            let t = deg * .pi / 180
+            let q = CGPoint(x: r * cos(t), y: r * sin(t))
+            if deg == -90 { shape.move(to: q) } else { shape.addLine(to: q) }
+        }
+        for deg in stride(from: 90.0, through: -90.0, by: -6) {
+            let t = deg * .pi / 180
+            shape.addLine(to: CGPoint(x: e * cos(t), y: r * sin(t)))
+        }
+        shape.closeSubpath()
+        let transform = CGAffineTransform(translationX: p.x, y: p.y).rotated(by: angle)
+        ctx.fill(shape.applying(transform), with: .color(color(lit, visible)))
     }
 
     /// The Sun: a twilight glow (the daylight model already brightens the sky around the Sun),
