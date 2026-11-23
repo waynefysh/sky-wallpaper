@@ -19,6 +19,14 @@ swift run SkyWallpaper     # launches the menu bar app and the desktop sky
 Or open `Package.swift` in Xcode and run the `SkyWallpaper` scheme. Use the sun-and-horizon
 menu bar icon to open Settings, set your coordinates, and scrub through the day or the seasons.
 
+## Display modes
+
+Choose in Settings: **Live sky** (default, animated window behind the icons), **Still image**
+(sets a rendered picture as the normal wallpaper every 5 minutes), or **Live, still on battery**.
+Your own wallpaper is put back when Sky quits.
+
+![London, 21 June 2026, through the day](Docs/london-midsummer-day.png)
+
 ## Layout
 
 | Path | What it is |
@@ -27,8 +35,9 @@ menu bar icon to open Settings, set your coordinates, and scrub through the day 
 | `Sources/SkyCore/SolarCalculator.swift` | NOAA / Meeus sun position, sunrise, sunset, twilight, polar day and night |
 | `Sources/SkyCore/StarCatalog.swift` | Bundled Bright Star Catalogue, precession from J2000, star colours |
 | `Sources/SkyCore/Weather.swift` | `WeatherProvider` protocol, Open-Meteo client, caching `WeatherService` |
+| `Sources/SkyCore/Atmosphere.swift` | Preetham daylight sky model, screen projection, low-res sky background renderer |
 | `Sources/SkyCore/SkyScene.swift` | Combines sun, stars and weather into one frame's scene and sky colours |
-| `Sources/SkyWallpaper/` | The app: desktop-level windows, SwiftUI Canvas renderer, settings |
+| `Sources/SkyWallpaper/` | The app: live desktop windows, still-image wallpaper mode, renderer, settings |
 | `Scripts/build_star_catalog.py` | Regenerates `Resources/bsc5.csv` from the catalogue JSON |
 
 ## Accuracy
@@ -48,7 +57,7 @@ Weather: [Open-Meteo](https://open-meteo.com/), free for non-commercial use (CC 
 ## Roadmap
 
 1. Scaffold, astronomy and weather model (this commit)
-2. Daytime sky polish: atmospheric scattering shader, sun disc, preview slider
+2. Daytime sky: Preetham scattering model, sun disc, display modes (this branch)
 3. Night sky: Moon with phase, planets, Milky Way
 4. Weather in Metal: volumetric-looking cloud layers lit by the Sun, rain on glass, fog, lightning
 5. Multi-display, power saving, launch at login, still-image mode

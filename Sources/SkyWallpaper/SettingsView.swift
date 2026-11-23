@@ -32,6 +32,11 @@ struct SettingsView: View {
                 Text(sunSummary).font(.caption).foregroundStyle(.secondary)
             }
             Section("Display") {
+                Picker("Show the sky as", selection: $model.displayMode) {
+                    ForEach(DisplayMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
                 Picker("Frame rate", selection: $model.frameRate) {
                     Text("15 fps").tag(15.0)
                     Text("30 fps").tag(30.0)
