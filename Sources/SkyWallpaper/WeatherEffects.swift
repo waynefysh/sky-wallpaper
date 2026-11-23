@@ -3,6 +3,13 @@ import AppKit
 import ApplicationServices
 import SkyCore
 
+/// A copy of one screen's weather state for drawing, so painting needs no main-actor access.
+struct WeatherSnapshot: Sendable {
+    var glass: GlassRain
+    var snow: SnowCover
+    var shelf: CGRect?
+}
+
 /// Rain on the glass and lying snow for one screen. The wallpaper and the overlay window both
 /// draw from it; whichever draws first in a frame moves it on.
 @MainActor
@@ -40,6 +47,8 @@ final class ScreenWeather {
             snow.clearLedge()
         }
     }
+
+    var snapshot: WeatherSnapshot { WeatherSnapshot(glass: glass, snow: snow, shelf: shelf) }
 
     /// Whether there is anything to draw on the Dock or over the windows.
     var hasVisibleEffects: Bool { !glass.drops.isEmpty || snow.totalSnow > 0.5 }

@@ -270,7 +270,7 @@ extension SkyPainter {
     }
 
     /// Splashes along the bottom of the screen, on top of any snow, except under the Dock.
-    func paintGroundSplashes(_ ctx: inout GraphicsContext, effects: ScreenWeather) {
+    func paintGroundSplashes(_ ctx: inout GraphicsContext, effects: WeatherSnapshot) {
         let snow = effects.snow
         let h = size.height
         let segments: [(Double, Double)]

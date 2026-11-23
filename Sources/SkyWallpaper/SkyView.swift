@@ -24,7 +24,7 @@ struct SkyView: View {
                 var painter = SkyPainter(scene: scene, size: size, time: now, fov: fov, background: background,
                                          moonImage: caches.moonImage(scene: scene, size: size, fov: fov))
                 painter.clouds = caches.clouds(scene: scene, size: size, fov: fov, now: now)
-                painter.effects = effects
+                painter.effects = effects.snapshot
                 painter.glassOnDesktop = model.glassMode == .desktop
                 painter.backgroundPixels = caches.backgroundPixels
                 painter.paint(&ctx)
@@ -269,7 +269,7 @@ struct SkyPainter {
     /// The cloud and fog layer, cross-fading between renders.
     var clouds: CloudFrames? = nil
     /// Rain on the glass and lying snow for this screen (live view only).
-    var effects: ScreenWeather? = nil
+    var effects: WeatherSnapshot? = nil
     /// Draw drops on the glass here (rather than on the overlay, or not at all).
     var glassOnDesktop = false
     var backgroundPixels: (pixels: [UInt8], width: Int, height: Int)? = nil
