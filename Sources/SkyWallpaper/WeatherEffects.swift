@@ -107,7 +107,15 @@ extension NSScreen {
 /// (System Settings > Privacy & Security > Accessibility). macOS has no other way to learn
 /// how wide the Dock is; without permission the Dock effects stay off.
 enum DockLocator {
-    static var isTrusted: Bool { AXIsProcessTrusted() }
+    /// The Mac App Store build (compiled with `-D APP_STORE`) is sandboxed, and a sandboxed app
+    /// cannot read another app's windows, so it leaves the Dock alone.
+    #if APP_STORE
+    static let isSupported = false
+    #else
+    static let isSupported = true
+    #endif
+
+    static var isTrusted: Bool { isSupported && AXIsProcessTrusted() }
 
     /// The gap between the top of the Dock's icon list and the top edge of its glass shelf,
     /// as a share of the list's height (measured from a screenshot of the macOS 27 Dock).
@@ -115,6 +123,7 @@ enum DockLocator {
 
     /// Shows the system prompt that leads to the Accessibility setting.
     static func requestAccess() {
+        guard isSupported else { return }
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
     }

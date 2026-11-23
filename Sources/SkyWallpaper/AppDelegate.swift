@@ -72,7 +72,7 @@ final class SkyModel: ObservableObject {
         didSet { UserDefaults.standard.set(glassMode.rawValue, forKey: "glassMode") }
     }
     /// Rain splashing on, and snow settling on, the Dock.
-    @Published var dockEffects: Bool = UserDefaults.standard.object(forKey: "dockEffects") as? Bool ?? true {
+    @Published var dockEffects: Bool = DockLocator.isSupported && (UserDefaults.standard.object(forKey: "dockEffects") as? Bool ?? true) {
         didSet { UserDefaults.standard.set(dockEffects, forKey: "dockEffects") }
     }
     /// Shows sample weather instead of the real weather, to try the effects out.
