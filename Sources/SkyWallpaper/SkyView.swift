@@ -484,7 +484,7 @@ struct SkyPainter {
         let glowR = size.width * (0.12 + 0.18 * scene.sunGlow)
         if twilight > 0 {
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - glowR, y: p.y - glowR, width: glowR * 2, height: glowR * 2)),
-                     with: .radialGradient(Gradient(colors: [color(light, 0.35 * twilight), color(light, 0)]),
+                     with: .radialGradient(Gradient(colors: [color(light, 0.35 * twilight * sunClarity), color(light, 0)]),
                                            center: p, startRadius: 0, endRadius: glowR))
         }
         let r = size.width * 0.007
