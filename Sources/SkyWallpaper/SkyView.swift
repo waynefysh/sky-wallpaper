@@ -454,15 +454,30 @@ struct SkyPainter {
                  with: .radialGradient(Gradient(colors: [color(lit, 0.28 * k * visible * (1 - daylight)), color(lit, 0)]),
                                        center: p, startRadius: r, endRadius: halo))
         if let moonImage {
-            // Real surface, lit for the phase; reddened and dimmed near the horizon.
-            var layer = ctx
-            layer.opacity = visible
-            layer.draw(Image(decorative: moonImage, scale: 1).interpolation(.high).resizable(),
-                       in: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
-            if lowWarmth > 0.01 {
-                layer.blendMode = .multiply
-                layer.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                           with: .color(color(SkyColor(1, 0.78, 0.55), lowWarmth * 0.8)))
+            // Real surface, lit for the phase; warmer near the horizon.
+            let img = Image(decorative: moonImage, scale: 1).interpolation(.high).resizable()
+            let rect = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
+            func moon(_ l: inout GraphicsContext) {
+                l.draw(img, in: rect)
+                if lowWarmth > 0.01 {
+                    // Tint only the Moon's own pixels, never the sky around it.
+                    l.blendMode = .sourceAtop
+                    l.fill(Path(ellipseIn: rect), with: .color(color(SkyColor(1, 0.72, 0.45), lowWarmth * 0.45)))
+                }
+            }
+            // At night it is drawn as a solid body, so its dark side hides the stars behind it.
+            if daylight < 1 {
+                var night = ctx
+                night.opacity = visible * (1 - daylight)
+                night.drawLayer { l in moon(&l) }
+            }
+            // By day the Moon is sunlit rock seen through bright sky: its light adds to the
+            // sky's, so it can only ever look brighter than the sky, never like a shadow.
+            if daylight > 0 {
+                var day = ctx
+                day.blendMode = .plusLighter
+                day.opacity = visible * daylight * 0.8
+                day.drawLayer { l in moon(&l) }
             }
             return
         }
