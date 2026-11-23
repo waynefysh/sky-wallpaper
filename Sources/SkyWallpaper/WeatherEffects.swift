@@ -38,11 +38,20 @@ final class ScreenWeather {
         snow.step(dt: dt, weather: weather)
     }
 
+    /// The flat part of the shelf's top edge: the Dock's glass has corners rounded by about
+    /// a third of its height.
+    static func flatTop(of shelf: CGRect) -> ClosedRange<Double> {
+        let corner = min(shelf.width / 2 - 1, shelf.height * 0.32)
+        return (shelf.minX + corner)...(shelf.maxX - corner)
+    }
+
     func setShelf(_ rect: CGRect?) {
         guard rect != shelf else { return }
         shelf = rect
         if let rect {
-            snow.setLedge(from: rect.minX, to: rect.maxX, height: size.height - rect.minY)
+            // Only the flat top holds snow; the rounded corners shed it.
+            let flat = Self.flatTop(of: rect)
+            snow.setLedge(from: flat.lowerBound, to: flat.upperBound, height: size.height - rect.minY)
         } else {
             snow.clearLedge()
         }

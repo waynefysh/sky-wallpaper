@@ -130,7 +130,8 @@ struct WeatherOverlayView: View {
                 look.paintSnow(&ctx, snow: fx.snow, screenHeight: screenSize.height, onLedge: true, offset: offset)
                 if let shelf = fx.shelf {
                     let snow = fx.snow
-                    look.paintSplashes(&ctx, time: now, from: shelf.minX - offset.x, to: shelf.maxX - offset.x, salt: 500) { x in
+                    let flat = ScreenWeather.flatTop(of: shelf)
+                    look.paintSplashes(&ctx, time: now, from: flat.lowerBound - offset.x, to: flat.upperBound - offset.x, salt: 500) { x in
                         screenSize.height - snow.surface(atX: x + offset.x) - offset.y
                     }
                 }

@@ -39,7 +39,10 @@ struct WeatherLook {
         let d = daylight
         let overcast = max(scene.weather.cloudLow, scene.weather.cloudMid * 0.8)
         let day = SkyColor(0.93 - 0.08 * overcast, 0.95 - 0.07 * overcast, 0.98 - 0.04 * overcast)
-        let night = SkyColor(0.20, 0.23, 0.30)
+        // Snow stays one of the brightest things in a night scene: it reflects moonlight,
+        // sky glow and town light, so it reads as pale blue-grey, never dark.
+        let moon = scene.moon.horizontal.altitude > 0 ? scene.moon.illuminatedFraction * (1 - overcast) : 0
+        let night = SkyColor(0.50 + 0.15 * moon, 0.54 + 0.15 * moon, 0.64 + 0.14 * moon)
         return SkyColor.mix(night, day, d)
     }
 
@@ -66,6 +69,24 @@ struct WeatherLook {
         // Only a real layer of snow is drawn: a sprinkle thinner than this would show as a
         // hard line along the shelf or the bottom of the screen.
         let minimum = 0.8
+        // Ground snow carries on under the Dock (blending across from either side), so it
+        // doesn't stop with a cut edge where the Dock's rounded corner starts.
+        var depth = snow.depth
+        if !onLedge {
+            var i = 0
+            while i < depth.count {
+                guard snow.floor[i] > 0 else { i += 1; continue }
+                var j = i
+                while j < depth.count, snow.floor[j] > 0 { j += 1 }
+                let left = i > 0 ? depth[i - 1] : (j < depth.count ? depth[j] : 0)
+                let right = j < depth.count ? depth[j] : left
+                for k in i..<j {
+                    let t = Double(k - i + 1) / Double(j - i + 1)
+                    depth[k] = left + (right - left) * t
+                }
+                i = j
+            }
+        }
         var fill = Path(), crust = Path()
         var open = false
         var lastX = 0.0, lastBase = 0.0
@@ -77,13 +98,13 @@ struct WeatherLook {
         for i in 0..<snow.columnCount {
             let isLedge = snow.floor[i] > 0
             let x = (Double(i) + 0.5) * snow.columnWidth - offset.x
-            guard isLedge == onLedge, snow.depth[i] > minimum else {
+            guard onLedge ? isLedge : true, depth[i] > minimum else {
                 if open { close() }
                 continue
             }
-            let base = screenHeight - snow.floor[i] - offset.y
+            let base = screenHeight - (onLedge ? snow.floor[i] : 0) - offset.y
             // Taper from nothing at the start of a patch, so it rises out of the surface.
-            let top = base - (snow.depth[i] - minimum)
+            let top = base - (depth[i] - minimum)
             if !open {
                 fill.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
                 crust.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
