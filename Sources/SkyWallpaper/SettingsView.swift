@@ -22,14 +22,15 @@ struct SettingsView: View {
                 }
             }
             Section("Preview") {
-                Slider(value: $model.previewOffset, in: -43_200...43_200) {
+                Slider(value: $model.previewSeconds, in: -43_200...43_200) {
                     Text("Shift time ±12 h")
                 }
-                Slider(value: Binding(get: { model.previewOffset / 86_400 },
-                                      set: { model.previewOffset = ($0 * 86_400).rounded() }),
-                       in: -183...183) {
+                Slider(value: $model.previewDays, in: -183...183, step: 1) {
                     Text("Shift date ±6 months")
                 }
+                DatePicker("Preview date and time", selection: Binding(
+                    get: { model.now },
+                    set: { model.previewOffset = $0.timeIntervalSinceNow.rounded() }))
                 Button("Back to now") { model.previewOffset = 0 }
                 Text(sunSummary).font(.caption).foregroundStyle(.secondary)
             }

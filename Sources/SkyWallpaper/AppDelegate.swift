@@ -48,7 +48,17 @@ final class SkyModel: ObservableObject {
     @Published var observer: Observer
     @Published var weather: WeatherConditions = .clear
     /// Added to the real clock, so the settings slider can preview any time of day or year.
-    @Published var previewOffset: TimeInterval = 0
+    /// Whole days and seconds of time of day, kept apart so the two sliders don't fight.
+    @Published var previewDays: Double = 0
+    @Published var previewSeconds: Double = 0
+    var previewOffset: TimeInterval {
+        get { previewDays * 86_400 + previewSeconds }
+        set {
+            let days = (newValue / 86_400).rounded()
+            previewDays = days
+            previewSeconds = newValue - days * 86_400
+        }
+    }
     /// Frames per second for the live view.
     @Published var frameRate: Double = 30
     @Published var displayMode: DisplayMode =
