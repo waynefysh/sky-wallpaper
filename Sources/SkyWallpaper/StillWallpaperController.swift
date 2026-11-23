@@ -49,7 +49,8 @@ final class StillWallpaperController {
         for (index, screen) in NSScreen.screens.enumerated() {
             let size = screen.frame.size
             let view = StillSkyView(scene: scene, fov: fov,
-                                    background: SkyBackground.image(scene: scene, size: size, fov: fov))
+                                    background: SkyBackground.image(scene: scene, size: size, fov: fov),
+                                    moonImage: MoonLayout(scene: scene, size: size, fov: fov)?.render())
                 .frame(width: size.width, height: size.height)
             let renderer = ImageRenderer(content: view)
             renderer.scale = screen.backingScaleFactor
