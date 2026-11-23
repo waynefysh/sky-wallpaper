@@ -68,6 +68,9 @@ final class SkyModel: ObservableObject {
     /// Shows sample weather instead of the real weather, to try the effects out.
     @Published var weatherPreview: WeatherConditions.Sample?
 
+    /// Snow settles and melts in real time with live weather, but 10× faster in a preview.
+    var snowSpeed: Double { weatherPreview == nil ? 1 : 10 }
+
     /// The weather to draw: the preview if one is chosen, otherwise the real weather.
     var effectiveWeather: WeatherConditions {
         weatherPreview.map { WeatherConditions.sample($0) } ?? weather

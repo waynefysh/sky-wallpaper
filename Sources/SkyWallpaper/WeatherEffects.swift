@@ -27,7 +27,9 @@ final class ScreenWeather {
         snow = SnowCover(width: size.width)
     }
 
-    func advance(to time: TimeInterval, weather: WeatherConditions, glass glassOn: Bool) {
+    /// - Parameter snowSpeed: how much faster than real time snow settles and melts
+    ///   (sped up while previewing, so a change of weather shows within a minute).
+    func advance(to time: TimeInterval, weather: WeatherConditions, glass glassOn: Bool, snowSpeed: Double = 1) {
         defer { last = time }
         guard let last, time > last else { return }
         let dt = time - last
@@ -35,7 +37,7 @@ final class ScreenWeather {
         if glassOn || !glass.drops.isEmpty {
             glass.step(dt: dt, intensity: glassOn ? GlassRain.intensity(for: weather) : 0, wind: wind)
         }
-        snow.step(dt: dt, weather: weather)
+        snow.step(dt: dt * snowSpeed, weather: weather)
     }
 
     /// The flat part of the shelf's top edge: the Dock's glass has corners rounded by about

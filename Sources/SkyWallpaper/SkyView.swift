@@ -20,7 +20,7 @@ struct SkyView: View {
                 let fov = caches.fieldOfView(scene: scene)
                 let background = caches.background(scene: scene, size: size, fov: fov)
                 let effects = model.effects.screen(screenID, size: size)
-                effects.advance(to: now, weather: weather, glass: model.glassMode != .off)
+                effects.advance(to: now, weather: weather, glass: model.glassMode != .off, snowSpeed: model.snowSpeed)
                 var painter = SkyPainter(scene: scene, size: size, time: now, fov: fov, background: background,
                                          moonImage: caches.moonImage(scene: scene, size: size, fov: fov))
                 painter.clouds = caches.clouds(scene: scene, size: size, fov: fov, now: now)

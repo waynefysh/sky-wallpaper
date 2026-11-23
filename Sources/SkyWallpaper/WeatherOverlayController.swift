@@ -122,7 +122,7 @@ struct WeatherOverlayView: View {
                 let screenSize = NSScreen.screens.first { $0.displayID == screenID }?.frame.size
                     ?? CGSize(width: region.maxX, height: region.maxY)
                 let fx = model.effects.screen(screenID, size: screenSize)
-                fx.advance(to: now, weather: weather, glass: model.glassMode != .off)
+                fx.advance(to: now, weather: weather, glass: model.glassMode != .off, snowSpeed: model.snowSpeed)
                 let scene = SkySceneBuilder(observer: model.observer, catalog: nil)
                     .scene(at: timeline.date.addingTimeInterval(model.previewOffset), weather: weather, includeStars: false)
                 let look = WeatherLook(scene: scene)
