@@ -19,6 +19,11 @@ final class DesktopWindowController {
         windows.forEach { $0.orderFront(nil) }
     }
 
+    func hide() {
+        windows.forEach { $0.orderOut(nil) }
+        windows = []
+    }
+
     private func makeWindow(for screen: NSScreen) -> NSWindow {
         let w = NSWindow(contentRect: screen.frame, styleMask: [.borderless],
                          backing: .buffered, defer: false, screen: screen)

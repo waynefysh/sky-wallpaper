@@ -2,56 +2,86 @@
 import SwiftUI
 import SkyCore
 
-/// First-pass renderer using SwiftUI Canvas. It proves the scene model end to end;
-/// milestone 4 moves clouds and precipitation into a Metal shader for richer looks.
+/// The live sky: redraws at the chosen frame rate behind the desktop icons.
+/// Clouds and precipitation move to a Metal shader in a later milestone.
 struct SkyView: View {
     @EnvironmentObject var model: SkyModel
-    @State private var starCache = StarCache()
+    @State private var caches = SkyCaches()
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / model.frameRate)) { timeline in
             Canvas { ctx, size in
                 let date = timeline.date.addingTimeInterval(model.previewOffset)
-                let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
-                var scene = builder.scene(at: date, weather: model.weather, includeStars: false)
-                scene.stars = starCache.stars(builder: builder, date: date, weather: model.weather)
-                let t = timeline.date.timeIntervalSinceReferenceDate
-                SkyPainter(scene: scene, size: size, time: t).paint(&ctx)
+                let scene = caches.scene(model: model, date: date)
+                let background = caches.background(scene: scene, size: size)
+                SkyPainter(scene: scene, size: size, time: timeline.date.timeIntervalSinceReferenceDate,
+                           background: background).paint(&ctx)
             }
         }
         .ignoresSafeArea()
     }
 }
 
-/// Star positions change slowly, so recompute them every few seconds rather than every frame.
-final class StarCache {
-    private var computedAt: Date = .distantPast
-    private var cached: [VisibleStar] = []
+/// One frozen frame of the sky, used for still-image wallpaper mode.
+struct StillSkyView: View {
+    let scene: SkyScene
+    let background: CGImage?
 
-    func stars(builder: SkySceneBuilder, date: Date, weather: WeatherConditions) -> [VisibleStar] {
-        if abs(date.timeIntervalSince(computedAt)) > 5 {
-            cached = builder.scene(at: date, weather: weather, includeStars: true).stars
-            computedAt = date
+    var body: some View {
+        Canvas { ctx, size in
+            SkyPainter(scene: scene, size: size, time: 0, background: background).paint(&ctx)
         }
-        return cached
     }
 }
 
-/// Maps sky directions to screen points. The view faces the equator (south in the northern
-/// hemisphere), so the Sun rises at the left and sets at the right.
-struct SkyProjection {
-    var size: CGSize
-    var facingAzimuth: Double
-    var horizontalFOV: Double = 140
-    var lowestAltitude: Double = -4
-    var highestAltitude: Double = 66
+/// Work that does not need redoing every frame: star positions (every 5 s) and the
+/// low-resolution sky background (every 2 s of sky time, or when something changes).
+@MainActor
+final class SkyCaches {
+    private var starsAt: Date = .distantPast
+    private var stars: [VisibleStar] = []
+    private var backgroundKey: (date: Date, size: CGSize, observer: Observer, weather: WeatherConditions)?
+    private var backgroundImage: CGImage?
 
-    func point(_ h: HorizontalCoordinates) -> CGPoint? {
-        let dAz = AstroMath.normalizeSigned(h.azimuth - facingAzimuth)
-        guard abs(dAz) <= horizontalFOV / 2 + 5 else { return nil }
-        let x = (dAz / horizontalFOV + 0.5) * size.width
-        let y = (1 - (h.altitude - lowestAltitude) / (highestAltitude - lowestAltitude)) * size.height
-        return CGPoint(x: x, y: y)
+    func scene(model: SkyModel, date: Date) -> SkyScene {
+        let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
+        var scene = builder.scene(at: date, weather: model.weather, includeStars: false)
+        if abs(date.timeIntervalSince(starsAt)) > 5 {
+            stars = builder.scene(at: date, weather: model.weather, includeStars: true).stars
+            starsAt = date
+        }
+        scene.stars = stars
+        return scene
+    }
+
+    func background(scene: SkyScene, size: CGSize) -> CGImage? {
+        if let k = backgroundKey, abs(scene.date.timeIntervalSince(k.date)) < 2, k.size == size,
+           k.observer == scene.observer, k.weather == scene.weather, let img = backgroundImage {
+            return img
+        }
+        backgroundImage = SkyBackground.image(scene: scene, size: size)
+        backgroundKey = (scene.date, size, scene.observer, scene.weather)
+        return backgroundImage
+    }
+}
+
+enum SkyBackground {
+    static let resolution = (width: 128, height: 80)
+
+    static func projection(for scene: SkyScene, size: CGSize) -> SkyProjection {
+        SkyProjection(width: size.width, height: size.height,
+                      facingAzimuth: scene.observer.latitude >= 0 ? 180 : 0)
+    }
+
+    static func image(scene: SkyScene, size: CGSize) -> CGImage? {
+        let (w, h) = resolution
+        let bytes = SkyGradientRenderer().render(scene: scene, projection: projection(for: scene, size: size),
+                                                 width: w, height: h)
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                       space: space, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 }
 
@@ -59,16 +89,19 @@ struct SkyPainter {
     let scene: SkyScene
     let size: CGSize
     let time: TimeInterval
+    let background: CGImage?
 
-    private var projection: SkyProjection {
-        SkyProjection(size: size, facingAzimuth: scene.observer.latitude >= 0 ? 180 : 0)
-    }
+    private var projection: SkyProjection { SkyBackground.projection(for: scene, size: size) }
     private var overcast: Double {
         max(scene.weather.cloudLow, scene.weather.cloudMid * 0.8, scene.weather.cloudHigh * 0.4)
     }
 
+    private func point(_ h: HorizontalCoordinates) -> CGPoint? {
+        projection.point(h).map { CGPoint(x: $0.x, y: $0.y) }
+    }
+
     func paint(_ ctx: inout GraphicsContext) {
-        paintGradient(&ctx)
+        paintBackground(&ctx)
         paintStars(&ctx)
         paintSun(&ctx)
         paintClouds(&ctx)
@@ -80,23 +113,26 @@ struct SkyPainter {
         Color(.sRGB, red: c.r, green: c.g, blue: c.b, opacity: opacity)
     }
 
-    private func paintGradient(_ ctx: inout GraphicsContext) {
-        // Overcast skies flatten towards grey.
-        let grey = SkyColor(0.55, 0.58, 0.62)
+    private func paintBackground(_ ctx: inout GraphicsContext) {
+        let rect = CGRect(origin: .zero, size: size)
+        if let background {
+            ctx.draw(Image(decorative: background, scale: 1).interpolation(.high).resizable(), in: rect)
+        } else {
+            ctx.fill(Path(rect), with: .linearGradient(
+                Gradient(colors: [color(scene.zenithColor), color(scene.horizonColor)]),
+                startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
+        }
+        // Overcast skies flatten towards grey, dimmer as the light fades.
+        guard overcast > 0.02 else { return }
         let dim = max(0.05, min(1, (scene.sun.horizontal.altitude + 8) / 20))
-        let greyLit = SkyColor(grey.r * dim, grey.g * dim, grey.b * dim)
-        let zenith = SkyColor.mix(scene.zenithColor, greyLit, overcast * 0.85)
-        let horizon = SkyColor.mix(scene.horizonColor, greyLit, overcast * 0.85)
-        ctx.fill(Path(CGRect(origin: .zero, size: size)),
-                 with: .linearGradient(Gradient(colors: [color(zenith), color(horizon)]),
-                                       startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
+        ctx.fill(Path(rect), with: .color(color(SkyColor(0.55 * dim, 0.58 * dim, 0.62 * dim), overcast * 0.85)))
     }
 
     private func paintStars(_ ctx: inout GraphicsContext) {
         let fade = scene.starVisibility * (1 - overcast)
         guard fade > 0.01 else { return }
         for s in scene.stars {
-            guard let p = projection.point(s.horizontal) else { continue }
+            guard let p = point(s.horizontal) else { continue }
             let m = s.star.magnitude
             let radius = max(0.5, 2.8 - 0.42 * m)
             // Twinkle more near the horizon, where we look through more air.
@@ -109,20 +145,32 @@ struct SkyPainter {
         }
     }
 
+    /// The Sun: a twilight glow (the daylight model already brightens the sky around the Sun),
+    /// a soft bloom, and a limb-darkened disc that reddens near the horizon.
     private func paintSun(_ ctx: inout GraphicsContext) {
-        guard let p = projection.point(scene.sun.horizontal) else { return }
+        guard let p = point(scene.sun.horizontal) else { return }
         let h = scene.sun.horizontal.altitude
-        let warmth = max(0, min(1, 1 - h / 12)) // redder near the horizon
-        let glow = SkyColor.mix(SkyColor(1, 0.97, 0.88), SkyColor(1, 0.55, 0.25), warmth)
+        let warmth = max(0, min(1, 1 - h / 12))
+        let tint = SkyColor.mix(SkyColor(1, 0.97, 0.90), SkyColor(1, 0.50, 0.22), warmth)
         let visible = 1 - overcast * 0.9
+
+        let twilight = 1 - max(0, min(1, (h - 2) / 8))
         let glowR = size.width * (0.12 + 0.18 * scene.sunGlow)
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - glowR, y: p.y - glowR, width: glowR * 2, height: glowR * 2)),
-                 with: .radialGradient(Gradient(colors: [color(glow, 0.55 * visible), color(glow, 0)]),
-                                       center: p, startRadius: 0, endRadius: glowR))
+        if twilight > 0 {
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - glowR, y: p.y - glowR, width: glowR * 2, height: glowR * 2)),
+                     with: .radialGradient(Gradient(colors: [color(tint, 0.5 * visible * twilight), color(tint, 0)]),
+                                           center: p, startRadius: 0, endRadius: glowR))
+        }
         guard h > -1.5 else { return }
-        let r = size.width * 0.008
+        let r = size.width * 0.007
+        let bloom = r * 6
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - bloom, y: p.y - bloom, width: bloom * 2, height: bloom * 2)),
+                 with: .radialGradient(Gradient(colors: [color(tint, 0.6 * visible), color(tint, 0)]),
+                                       center: p, startRadius: r, endRadius: bloom))
+        let limb = SkyColor(tint.r * 0.92, tint.g * 0.80, tint.b * 0.65)
         ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                 with: .color(color(glow, visible)))
+                 with: .radialGradient(Gradient(colors: [color(SkyColor(1, 1, 0.97), visible), color(limb, visible)]),
+                                       center: p, startRadius: 0, endRadius: r))
     }
 
     /// Simple placeholder clouds: soft blurred puffs in three parallax layers, drifting with the wind.

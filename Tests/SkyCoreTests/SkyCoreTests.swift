@@ -127,3 +127,55 @@ final class WeatherTests: XCTestCase {
         XCTAssertEqual(OpenMeteoProvider.precipitationKind(weatherCode: 99), .hail)
     }
 }
+
+final class AtmosphereTests: XCTestCase {
+    private func sky(sunAltitude: Double, turbidity: Double = 2.5) -> PreethamSky {
+        PreethamSky(turbidity: turbidity, sunZenith: (90 - sunAltitude) * AstroMath.deg2rad)
+    }
+
+    /// Preetham zenith luminance for T = 2.5 with the Sun 60° up is 8.19 kcd/m² (eq. A.2).
+    func testZenithLuminanceIsPlausible() {
+        XCTAssertEqual(sky(sunAltitude: 60).zenithLuminance, 8.19, accuracy: 0.01)
+        XCTAssertLessThan(sky(sunAltitude: 10).zenithLuminance, sky(sunAltitude: 60).zenithLuminance)
+    }
+
+    func testClearMiddaySkyIsBlueAtZenith() {
+        let model = sky(sunAltitude: 55)
+        let c = model.displayColor(theta: 0, gamma: 35 * AstroMath.deg2rad)
+        XCTAssertGreaterThan(c.b, c.r + 0.15)
+        XCTAssertGreaterThan(c.b, c.g)
+    }
+
+    func testSkyIsBrighterNearTheSun() {
+        let model = sky(sunAltitude: 30)
+        let near = model.displayColor(theta: 60 * AstroMath.deg2rad, gamma: 5 * AstroMath.deg2rad)
+        let away = model.displayColor(theta: 60 * AstroMath.deg2rad, gamma: 150 * AstroMath.deg2rad)
+        XCTAssertGreaterThan(near.r + near.g + near.b, away.r + away.g + away.b)
+    }
+
+    func testHazeRaisesTurbidity() {
+        XCTAssertLessThan(PreethamSky.turbidity(visibility: 50_000), 3)
+        XCTAssertGreaterThan(PreethamSky.turbidity(visibility: 4_000), 6)
+    }
+
+    func testProjectionRoundTrip() {
+        let p = SkyProjection(width: 1800, height: 1169, facingAzimuth: 180)
+        let h = HorizontalCoordinates(altitude: 23.5, azimuth: 141)
+        let pt = try! XCTUnwrap(p.point(h))
+        let back = p.direction(x: pt.x, y: pt.y)
+        XCTAssertEqual(back.altitude, 23.5, accuracy: 1e-9)
+        XCTAssertEqual(back.azimuth, 141, accuracy: 1e-9)
+    }
+
+    func testRendererFillsBuffer() {
+        let builder = SkySceneBuilder(observer: Observer(latitude: 51.5, longitude: -0.13), catalog: nil)
+        let scene = builder.scene(at: Date(timeIntervalSince1970: 1_782_043_200), weather: .clear) // 21 Jun 2026 12:00 UTC
+        let p = SkyProjection(width: 1800, height: 1169, facingAzimuth: 180)
+        let px = SkyGradientRenderer().render(scene: scene, projection: p, width: 32, height: 20)
+        XCTAssertEqual(px.count, 32 * 20 * 4)
+        // Top-centre pixel is a daytime blue.
+        let o = (0 * 32 + 16) * 4
+        XCTAssertGreaterThan(Int(px[o + 2]), Int(px[o]))
+        XCTAssertGreaterThan(Int(px[o + 2]), 150)
+    }
+}
