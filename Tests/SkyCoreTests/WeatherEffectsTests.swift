@@ -194,3 +194,41 @@ final class WeatherParsingTests: XCTestCase {
         XCTAssertEqual(w.precipitation, .snow)
     }
 }
+
+final class RainbowTests: XCTestCase {
+    func testColoursAreInTheRightOrder() {
+        // Primary: red outside (larger angle), blue inside.
+        let outer = Rainbow.light(atAngle: 42.2), inner = Rainbow.light(atAngle: 40.6)
+        XCTAssertGreaterThan(outer.0, outer.2)
+        XCTAssertGreaterThan(inner.2, inner.0)
+        // Secondary is reversed: blue outside.
+        let s2out = Rainbow.light(atAngle: 52.6), s2in = Rainbow.light(atAngle: 50.5)
+        XCTAssertGreaterThan(s2out.2, s2out.0)
+        XCTAssertGreaterThan(s2in.0, s2in.2)
+        // Alexander's band between the bows is the darkest part.
+        XCTAssertLessThan(Rainbow.light(atAngle: 46).0, 0.05)
+    }
+
+    func testNeedsSunAndShowers() {
+        let showers = WeatherConditions.sample(.showers)
+        XCTAssertGreaterThan(Rainbow.strength(weather: showers, sunAltitude: 15), 0.5)
+        XCTAssertEqual(Rainbow.strength(weather: showers, sunAltitude: 50), 0)   // Sun too high
+        XCTAssertEqual(Rainbow.strength(weather: showers, sunAltitude: -3), 0)   // Sun set
+        XCTAssertEqual(Rainbow.strength(weather: .sample(.overcast), sunAltitude: 15), 0) // no rain
+        XCTAssertLessThan(Rainbow.strength(weather: .sample(.rain), sunAltitude: 15), 0.2) // solid deck
+    }
+
+    func testFindsAChanceToSeeOneFromLondon() throws {
+        let london = Observer(latitude: 51.5, longitude: -0.13)
+        let start = Date(timeIntervalSince1970: 1_795_392_000) // 23 Nov 2026
+        let tz = TimeZone(identifier: "Europe/London")!
+        let when = try XCTUnwrap(Rainbow.nextChanceInView(observer: london, after: start, timeZone: tz))
+        let fov = SkyProjection.seasonalFieldOfView(observer: london, date: when, timeZone: tz)
+        XCTAssertTrue(Rainbow.isInView(observer: london, at: when, fieldOfView: fov))
+        // And it is actually drawn on screen then.
+        var scene = SkySceneBuilder(observer: london, catalog: nil).scene(at: when, weather: .sample(.showers), includeStars: false)
+        scene.weather = .sample(.showers)
+        let pr = SkyProjection(width: 1600, height: 1000, facingAzimuth: 180, horizontalFOV: fov)
+        XCTAssertNotNil(Rainbow.render(scene: scene, projection: pr, width: 160, height: 100))
+    }
+}

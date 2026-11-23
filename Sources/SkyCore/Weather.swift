@@ -36,13 +36,14 @@ public struct WeatherConditions: Equatable, Sendable, Codable {
 extension WeatherConditions {
     /// Ready-made conditions for previewing the weather effects from Settings.
     public enum Sample: String, CaseIterable, Sendable {
-        case clear, fairWeatherClouds, overcast, rain, thunderstorm, snow, fog
+        case clear, fairWeatherClouds, overcast, showers, rain, thunderstorm, snow, fog
 
         public var title: String {
             switch self {
             case .clear: return "Clear"
             case .fairWeatherClouds: return "Scattered clouds"
             case .overcast: return "Overcast"
+            case .showers: return "Sunshine and showers"
             case .rain: return "Rain"
             case .thunderstorm: return "Thunderstorm"
             case .snow: return "Snow"
@@ -61,6 +62,10 @@ extension WeatherConditions {
         case .overcast:
             (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.95, 0.6, 0.2, 6)
             w.weatherCode = 3
+            w.visibility = 15_000
+        case .showers:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.4, 0.25, 0.2, 6)
+            (w.precipitation, w.precipitationRate, w.weatherCode) = (.rain, 2, 80)
             w.visibility = 15_000
         case .rain:
             (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.9, 0.7, 0.3, 7)

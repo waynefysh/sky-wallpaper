@@ -70,6 +70,14 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onChange(of: model.weatherPreview) { _, preview in
+            // A rainbow stands opposite the Sun, so in this south-facing view it only shows at
+            // some times of day and year: jump the preview to the next one.
+            if preview == .showers,
+               let when = Rainbow.nextChanceInView(observer: model.observer, after: Date()) {
+                model.previewOffset = when.timeIntervalSinceNow.rounded()
+            }
+        }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             dockAllowed = DockLocator.isTrusted
         }

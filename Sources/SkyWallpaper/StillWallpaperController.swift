@@ -54,7 +54,9 @@ final class StillWallpaperController {
             let view = StillSkyView(scene: scene, fov: fov,
                                     background: SkyBackground.image(scene: scene, size: size, fov: fov),
                                     moonImage: MoonLayout(scene: scene, size: size, fov: fov)?.render(),
-                                    clouds: clouds.cgImage)
+                                    clouds: clouds.cgImage,
+                                    rainbow: Rainbow.render(scene: scene, projection: SkyBackground.projection(for: scene, size: size, fov: fov),
+                                                            width: cw, height: ch)?.cgImage)
                 .frame(width: size.width, height: size.height)
             let renderer = ImageRenderer(content: view)
             renderer.scale = screen.backingScaleFactor

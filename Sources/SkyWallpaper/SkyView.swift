@@ -24,6 +24,7 @@ struct SkyView: View {
                 var painter = SkyPainter(scene: scene, size: size, time: now, fov: fov, background: background,
                                          moonImage: caches.moonImage(scene: scene, size: size, fov: fov))
                 painter.clouds = caches.clouds(scene: scene, size: size, fov: fov, now: now)
+                painter.rainbow = caches.rainbow(scene: scene, size: size, fov: fov)
                 painter.effects = effects.snapshot
                 painter.glassOnDesktop = model.glassMode == .desktop
                 painter.backgroundPixels = caches.backgroundPixels
@@ -41,12 +42,14 @@ struct StillSkyView: View {
     let background: CGImage?
     var moonImage: CGImage? = nil
     var clouds: CGImage? = nil
+    var rainbow: CGImage? = nil
 
     var body: some View {
         Canvas { ctx, size in
             var painter = SkyPainter(scene: scene, size: size, time: 0, fov: fov, background: background,
                                      moonImage: moonImage)
             painter.clouds = clouds.map { CloudFrames(previous: nil, current: $0, mix: 1) }
+            painter.rainbow = rainbow
             painter.paint(&ctx)
         }
     }
@@ -79,6 +82,22 @@ final class SkyCaches {
     private var cloudRendering = false
     private var cloudKey: (size: CGSize, observer: Observer, weather: WeatherConditions)?
     static let cloudInterval = 0.5
+
+    private var rainbowKey: (date: Date, size: CGSize, weather: WeatherConditions, fov: Double)?
+    private var rainbowImage: CGImage?
+
+    /// The rainbow moves with the Sun, so it is redrawn every few seconds of sky time.
+    func rainbow(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
+        if let k = rainbowKey, abs(scene.date.timeIntervalSince(k.date)) < 5, k.size == size,
+           k.weather == scene.weather, k.fov == fov {
+            return rainbowImage
+        }
+        rainbowKey = (scene.date, size, scene.weather, fov)
+        let (w, h) = CloudFrames.resolution(for: size)
+        rainbowImage = Rainbow.render(scene: scene, projection: SkyBackground.projection(for: scene, size: size, fov: fov),
+                                      width: w, height: h)?.cgImage
+        return rainbowImage
+    }
 
     func clouds(scene: SkyScene, size: CGSize, fov: Double, now: TimeInterval) -> CloudFrames? {
         let changed = cloudKey.map { $0.size != size || $0.observer != scene.observer || $0.weather != scene.weather } ?? true
@@ -275,6 +294,8 @@ struct SkyPainter {
     var moonImage: CGImage? = nil
     /// The cloud and fog layer, cross-fading between renders.
     var clouds: CloudFrames? = nil
+    /// A rainbow opposite the Sun in showers, added as light.
+    var rainbow: CGImage? = nil
     /// Rain on the glass and lying snow for this screen (live view only).
     var effects: WeatherSnapshot? = nil
     /// Draw drops on the glass here (rather than on the overlay, or not at all).
@@ -300,6 +321,12 @@ struct SkyPainter {
         paintClouds(&ctx, flash: flash)
         paintSunThroughCloud(&ctx)
         paintSunInFog(&ctx)
+        if let rainbow {
+            var bow = ctx
+            bow.blendMode = .plusLighter
+            bow.draw(Image(decorative: rainbow, scale: 1).interpolation(.high).resizable(),
+                     in: CGRect(origin: .zero, size: size))
+        }
         paintLightning(&ctx, flash: flash)
         paintPrecipitation(&ctx)
         if let effects {
