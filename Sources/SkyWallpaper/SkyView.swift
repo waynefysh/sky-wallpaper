@@ -299,6 +299,7 @@ struct SkyPainter {
         let flash = scene.weather.isThunderstorm ? Lightning.flash(at: time, activity: 0.6) : nil
         paintClouds(&ctx, flash: flash)
         paintSunThroughCloud(&ctx)
+        paintSunInFog(&ctx)
         paintLightning(&ctx, flash: flash)
         paintPrecipitation(&ctx)
         if let effects {
@@ -497,7 +498,7 @@ struct SkyPainter {
         let warmth = max(0, min(1, 1 - h / 15))
         var glow = ctx
         glow.blendMode = .plusLighter
-        glow.opacity = brightness
+        glow.opacity = brightness * sunClarity
         glow.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: horizonY + r * 0.15)))
 
         // Aureole: exp(−d / 5r), out to 20 r.
@@ -534,12 +535,55 @@ struct SkyPainter {
         ]), center: p, startRadius: 0, endRadius: r))
     }
 
+    /// How thick the cloud deck is, 0 (none or broken) ... 1 (a dark rain or storm deck).
+    var cloudThickness: Double {
+        let w = scene.weather
+        var t = smoothstep01((max(w.cloudLow, w.cloudMid * 0.8) - 0.6) / 0.4)
+        if w.precipitation != .none { t += 0.3 }
+        if w.isThunderstorm { t += 0.3 }
+        return min(1, t)
+    }
+
+    /// 0 in clear air ... 1 in thick fog.
+    var fogginess: Double {
+        1 - smoothstep01(((scene.weather.visibility ?? 30_000) - 300) / 4_700)
+    }
+
+    /// How much of the Sun's glare gets through: none under a thick deck, little in fog.
+    var sunClarity: Double {
+        pow(1 - cloudThickness, 2) * (1 - 0.85 * fogginess)
+    }
+
+    /// In fog or mist the Sun is a pale white disc you can look straight at, with no glare,
+    /// fading out as the fog thickens.
+    func paintSunInFog(_ ctx: inout GraphicsContext) {
+        let f = fogginess
+        guard f > 0.05, let p = point(scene.sun.horizontal) else { return }
+        let h = scene.sun.horizontal.altitude
+        let vis = scene.weather.visibility ?? 30_000
+        let alpha = f * (1 - cloudThickness) * smoothstep01((vis - 120) / 500) * smoothstep01((h + 0.5) / 4) * 0.75
+        guard alpha > 0.01 else { return }
+        let r = size.width * 0.007
+        let tint = SkyColor.mix(SkyColor(1, 1, 0.97), sunLight, 0.6)
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r * 5, y: p.y - r * 5, width: r * 10, height: r * 10)),
+                 with: .radialGradient(Gradient(colors: [color(tint, alpha * 0.25), color(tint, 0)]),
+                                       center: p, startRadius: r, endRadius: r * 5))
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
+                 with: .radialGradient(Gradient(stops: [
+                     .init(color: color(tint, alpha), location: 0),
+                     .init(color: color(tint, alpha), location: 0.85),
+                     .init(color: color(tint, 0), location: 1),
+                 ]), center: p, startRadius: 0, endRadius: r))
+    }
+
     /// Behind cloud the Sun is a brighter, diffuse patch rather than a disc.
     func paintSunThroughCloud(_ ctx: inout GraphicsContext) {
         guard clouds != nil, overcast > 0.05, let p = point(scene.sun.horizontal) else { return }
         let h = scene.sun.horizontal.altitude
         guard h > -1 else { return }
-        let strength = 0.28 * min(1, overcast * 1.5) * max(0, min(1, (h + 1) / 4))
+        // Bright through thin or broken cloud; under a thick, rainy deck only a faint lighter patch.
+        let strength = (0.28 * min(1, overcast * 1.5) * pow(1 - cloudThickness, 1.5) + 0.05 * cloudThickness)
+            * max(0, min(1, (h + 1) / 4)) * (1 - 0.7 * fogginess)
         let reach = size.width * 0.007 * 14
         var glow = ctx
         glow.blendMode = .plusLighter
