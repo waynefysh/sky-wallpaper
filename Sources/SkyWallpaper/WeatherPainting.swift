@@ -190,12 +190,19 @@ extension SkyPainter {
         guard let clouds else { return }
         let rect = CGRect(origin: .zero, size: size)
         ctx.drawLayer { layer in
-            if let previous = clouds.previous, clouds.mix < 1 {
-                layer.draw(Image(decorative: previous, scale: 1).interpolation(.high).resizable(), in: rect)
+            // A true cross-fade: (1 − mix) of the old render plus mix of the new one, added
+            // together. Drawing the new one over the old instead would stack the semi-transparent
+            // parts (thin cloud, fog) and make them pulse brighter every time a render arrives.
+            let mix = clouds.previous == nil ? 1 : max(0, min(1, clouds.mix))
+            if let previous = clouds.previous, mix < 1 {
+                var old = layer
+                old.opacity = 1 - mix
+                old.draw(Image(decorative: previous, scale: 1).interpolation(.high).resizable(), in: rect)
             }
-            var top = layer
-            top.opacity = clouds.previous == nil ? 1 : clouds.mix
-            top.draw(Image(decorative: clouds.current, scale: 1).interpolation(.high).resizable(), in: rect)
+            var new = layer
+            new.opacity = mix
+            new.blendMode = .plusLighter
+            new.draw(Image(decorative: clouds.current, scale: 1).interpolation(.high).resizable(), in: rect)
             if let flash {
                 // Only where there is cloud: the flash glows through it.
                 layer.blendMode = .sourceAtop

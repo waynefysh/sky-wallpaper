@@ -72,6 +72,9 @@ final class SkyCaches {
     private var cloudCurrent: CGImage?
     private var cloudPrevious: CGImage?
     private var cloudArrivedAt = 0.0
+    /// How long each cross-fade lasts: the time the last render took to arrive, so the fade
+    /// finishes as the next one lands instead of holding still and then jumping.
+    private var cloudFade = 0.5
     private var cloudStartedAt = -100.0
     private var cloudRendering = false
     private var cloudKey: (size: CGSize, observer: Observer, weather: WeatherConditions)?
@@ -79,8 +82,8 @@ final class SkyCaches {
 
     func clouds(scene: SkyScene, size: CGSize, fov: Double, now: TimeInterval) -> CloudFrames? {
         let changed = cloudKey.map { $0.size != size || $0.observer != scene.observer || $0.weather != scene.weather } ?? true
-        if changed {
-            cloudPrevious = nil // a new look: don't fade from clouds that no longer apply
+        if let key = cloudKey, key.size != size {
+            cloudPrevious = nil // the old render no longer fits the screen
         }
         if !cloudRendering, changed || now - cloudStartedAt >= Self.cloudInterval {
             cloudRendering = true
@@ -96,14 +99,18 @@ final class SkyCaches {
         }
         guard let cloudCurrent else { return nil }
         return CloudFrames(previous: cloudPrevious, current: cloudCurrent,
-                           mix: min(1, (now - cloudArrivedAt) / Self.cloudInterval))
+                           mix: min(1, (now - cloudArrivedAt) / cloudFade))
     }
 
     private func cloudsArrived(_ image: RGBAImage) {
         cloudRendering = false
+        let arrived = Date.timeIntervalSinceReferenceDate
+        if cloudCurrent != nil {
+            cloudFade = max(Self.cloudInterval, min(3, arrived - cloudArrivedAt))
+        }
         cloudPrevious = cloudCurrent
         cloudCurrent = image.cgImage
-        cloudArrivedAt = Date.timeIntervalSinceReferenceDate
+        cloudArrivedAt = arrived
     }
 
     /// Field of view for the scene's day, recomputed once per local day or when the location changes.
