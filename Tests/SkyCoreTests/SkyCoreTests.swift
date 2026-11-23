@@ -179,3 +179,35 @@ final class AtmosphereTests: XCTestCase {
         XCTAssertGreaterThan(Int(px[o + 2]), 150)
     }
 }
+
+final class FieldOfViewTests: XCTestCase {
+    private func utc(_ y: Int, _ mo: Int, _ d: Int) -> Date {
+        Calendar(identifier: .gregorian).date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: y, month: mo, day: d, hour: 12))!
+    }
+    private let london = Observer(latitude: 51.5074, longitude: -0.1278)
+    private let utcZone = TimeZone(identifier: "UTC")!
+
+    /// London midsummer: sunrise at azimuth 48.9°, 131° from south, so the view spans about 286°.
+    func testWidensInSummerToShowSunriseAndSunset() {
+        let fov = SkyProjection.seasonalFieldOfView(observer: london, date: utc(2026, 6, 21), timeZone: utcZone)
+        XCTAssertEqual(fov, 286.2, accuracy: 1)
+        let calc = SolarCalculator(observer: london)
+        let day = calc.day(containing: utc(2026, 6, 21), timeZone: utcZone)
+        let p = SkyProjection(width: 1800, height: 1169, facingAzimuth: 180, horizontalFOV: fov)
+        for event in [day.sunrise!, day.sunset!] {
+            let pt = try! XCTUnwrap(p.point(calc.position(at: event).horizontal))
+            XCTAssertGreaterThan(pt.x, 0)
+            XCTAssertLessThan(pt.x, 1800)
+        }
+    }
+
+    func testStaysNarrowInWinter() {
+        XCTAssertEqual(SkyProjection.seasonalFieldOfView(observer: london, date: utc(2026, 12, 21), timeZone: utcZone), 140)
+    }
+
+    func testPolarDayUsesMaximum() {
+        let tromso = Observer(latitude: 69.65, longitude: 18.96)
+        XCTAssertEqual(SkyProjection.seasonalFieldOfView(observer: tromso, date: utc(2026, 6, 21), timeZone: utcZone), 300)
+    }
+}

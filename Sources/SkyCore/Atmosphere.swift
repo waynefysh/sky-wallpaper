@@ -114,10 +114,33 @@ public struct SkyProjection: Sendable {
     public var lowestAltitude: Double = -4
     public var highestAltitude: Double = 66
 
-    public init(width: Double, height: Double, facingAzimuth: Double) {
+    public init(width: Double, height: Double, facingAzimuth: Double, horizontalFOV: Double = 140) {
         self.width = width
         self.height = height
         self.facingAzimuth = facingAzimuth
+        self.horizontalFOV = horizontalFOV
+    }
+
+    /// The direction the view faces by default: towards the equator, where the Sun is at noon.
+    public static func equatorFacingAzimuth(for observer: Observer) -> Double {
+        observer.latitude >= 0 ? 180 : 0
+    }
+
+    /// A horizontal field of view wide enough to keep the day's sunrise and sunset on screen.
+    /// Near midsummer away from the tropics the Sun rises and sets behind a viewer facing the
+    /// equator, so the view widens with the seasons: about 140° in winter, up to 300° in summer.
+    public static func seasonalFieldOfView(observer: Observer, date: Date, timeZone: TimeZone = .current,
+                                           minimum: Double = 140, maximum: Double = 300,
+                                           margin: Double = 12) -> Double {
+        let calc = SolarCalculator(observer: observer)
+        let day = calc.day(containing: date, timeZone: timeZone)
+        if day.isPolarDay { return maximum }
+        guard let rise = day.sunrise, let set = day.sunset else { return minimum }
+        let facing = equatorFacingAzimuth(for: observer)
+        let spread = [rise, set]
+            .map { abs(AstroMath.normalizeSigned(calc.position(at: $0).horizontal.azimuth - facing)) }
+            .max() ?? 0
+        return max(minimum, min(maximum, 2 * (spread + margin)))
     }
 
     /// Screen point (origin top-left) for a sky direction, or nil if well off screen.
