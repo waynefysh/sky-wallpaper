@@ -99,7 +99,8 @@ final class GlassRainTests: XCTestCase {
         for _ in 0..<30 { glass.step(dt: 1 / 30, intensity: 0) }
         let biggest = glass.drops.max { $0.radius < $1.radius }!
         XCTAssertGreaterThan(biggest.y, 60)
-        XCTAssertGreaterThan(biggest.radius, 3.5) // took in the small drop
+        // The small drop was swallowed: only the runner is left, plus its tiny trail droplets.
+        XCTAssertEqual(glass.drops.filter { $0.radius > 1.2 }.count, 1)
         // Water is only lost to a little evaporation.
         XCTAssertEqual(glass.totalVolume, before, accuracy: before * 0.08)
     }
