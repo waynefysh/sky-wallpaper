@@ -44,13 +44,17 @@ final class StillWallpaperController {
         generation += 1
         let date = model.now
         let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
-        let scene = builder.scene(at: date, weather: model.weather, includeStars: true)
+        let scene = builder.scene(at: date, weather: model.effectiveWeather, includeStars: true)
         let fov = SkyProjection.seasonalFieldOfView(observer: model.observer, date: date)
         for (index, screen) in NSScreen.screens.enumerated() {
             let size = screen.frame.size
+            let (cw, ch) = CloudFrames.resolution(for: size)
+            let clouds = CloudRenderer().render(scene: scene, projection: SkyBackground.projection(for: scene, size: size, fov: fov),
+                                                width: cw, height: ch, time: date.timeIntervalSinceReferenceDate)
             let view = StillSkyView(scene: scene, fov: fov,
                                     background: SkyBackground.image(scene: scene, size: size, fov: fov),
-                                    moonImage: MoonLayout(scene: scene, size: size, fov: fov)?.render())
+                                    moonImage: MoonLayout(scene: scene, size: size, fov: fov)?.render(),
+                                    clouds: clouds.cgImage)
                 .frame(width: size.width, height: size.height)
             let renderer = ImageRenderer(content: view)
             renderer.scale = screen.backingScaleFactor
