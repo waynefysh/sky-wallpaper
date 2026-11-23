@@ -10,6 +10,9 @@ public struct SnowCover: Sendable {
     public let columnWidth: Double
     public private(set) var floor: [Double]
     public private(set) var depth: [Double]
+    /// How readily snow collects in each column: wind sweeps some spots bare and piles snow
+    /// into drifts in others, so the cover is a run of mounds and dips, not a flat band.
+    public let drift: [Double]
     private var rng: SplitMix
 
     /// The steepest step allowed between neighbouring columns, in points, before snow slides.
@@ -22,6 +25,13 @@ public struct SnowCover: Sendable {
         floor = Array(repeating: 0, count: n)
         depth = Array(repeating: 0, count: n)
         rng = SplitMix(seed: seed)
+        let noise = GradientNoise(seed: UInt32(truncatingIfNeeded: seed &* 2_654_435_761))
+        drift = (0..<n).map { i in
+            let x = (Double(i) + 0.5) * columnWidth
+            let v = 1 + 1.3 * noise.noise(x / 160 + 0.37, 0.5) + 0.6 * noise.noise(x / 48 + 7.1, 3.3)
+                + 0.25 * noise.noise(x / 14 + 2.9, 8.1)
+            return max(0.2, min(2, v))
+        }
     }
 
     public var columnCount: Int { depth.count }
@@ -72,15 +82,15 @@ public struct SnowCover: Sendable {
             let hits = max(1, Int(Double(n) * 0.25))
             for _ in 0..<hits {
                 let i = Int(rng.unit() * Double(n)) % n
-                depth[i] = min(Self.maxDepth, depth[i] + fall * Double(n) / Double(hits) * (0.5 + rng.unit()))
+                depth[i] = min(Self.maxDepth, depth[i] + fall * Double(n) / Double(hits) * (0.5 + rng.unit()) * drift[i])
             }
         }
 
         // Snow already on the ground (from the forecast) appears gradually, not all at once.
         let lying = Self.lyingDepth(snowDepth: weather.snowDepth)
         if lying > 0 {
-            for i in 0..<n where floor[i] == 0 && depth[i] < lying {
-                depth[i] = min(lying, depth[i] + 0.05 * dt * (0.5 + rng.unit()))
+            for i in 0..<n where floor[i] == 0 && depth[i] < lying * drift[i] {
+                depth[i] = min(lying * drift[i], depth[i] + 0.05 * dt * (0.5 + rng.unit()) * drift[i])
             }
         }
 
@@ -89,7 +99,7 @@ public struct SnowCover: Sendable {
         let melt = max(0, weather.temperature) * 0.004 + (rainy ? 0.02 : 0)
         if melt > 0 {
             for i in 0..<n {
-                let keep = floor[i] == 0 ? lying : 0
+                let keep = floor[i] == 0 ? lying * drift[i] : 0
                 if depth[i] > keep { depth[i] = max(keep, depth[i] - melt * dt) }
             }
         }

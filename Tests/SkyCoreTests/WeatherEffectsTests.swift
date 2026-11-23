@@ -145,7 +145,17 @@ final class SnowTests: XCTestCase {
         w.snowDepth = 0.06
         var snow = SnowCover(width: 300)
         for _ in 0..<1200 { snow.step(dt: 0.5, weather: w) }
-        XCTAssertEqual(snow.surface(atX: 150), SnowCover.lyingDepth(snowDepth: 0.06), accuracy: 1)
+        // On average it is as deep as reported, but drifted: deeper in places, thin in others.
+        let mean = snow.totalSnow / Double(snow.columnCount)
+        XCTAssertEqual(mean, SnowCover.lyingDepth(snowDepth: 0.06), accuracy: SnowCover.lyingDepth(snowDepth: 0.06) * 0.3)
+        XCTAssertGreaterThan(snow.depth.max()! - snow.depth.min()!, 4)
+    }
+
+    func testDriftsAreUneven() {
+        let snow = SnowCover(width: 1500)
+        XCTAssertGreaterThan(snow.drift.max()!, 1.4)
+        XCTAssertLessThan(snow.drift.min()!, 0.6)
+        XCTAssertEqual(snow.drift.reduce(0, +) / Double(snow.drift.count), 1, accuracy: 0.25)
     }
 }
 

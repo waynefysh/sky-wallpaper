@@ -87,35 +87,42 @@ struct WeatherLook {
                 i = j
             }
         }
-        var fill = Path(), crust = Path()
-        var open = false
-        var lastX = 0.0, lastBase = 0.0
-        func close() {
-            fill.addLine(to: CGPoint(x: lastX + snow.columnWidth / 2, y: lastBase))
-            fill.closeSubpath()
-            open = false
-        }
+        // Gather runs of snowy columns, then draw each as a smooth curve with rounded ends.
+        var runs: [[CGPoint]] = []
+        var bases: [Double] = []
+        var current: [CGPoint] = []
         for i in 0..<snow.columnCount {
             let isLedge = snow.floor[i] > 0
             let x = (Double(i) + 0.5) * snow.columnWidth - offset.x
             guard onLedge ? isLedge : true, depth[i] > minimum else {
-                if open { close() }
+                if !current.isEmpty { runs.append(current); current = [] }
                 continue
             }
             let base = screenHeight - (onLedge ? snow.floor[i] : 0) - offset.y
-            // Taper from nothing at the start of a patch, so it rises out of the surface.
-            let top = base - (depth[i] - minimum)
-            if !open {
-                fill.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
-                crust.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
-                open = true
-            }
-            fill.addLine(to: CGPoint(x: x, y: top))
-            crust.addLine(to: CGPoint(x: x, y: top))
-            lastX = x
-            lastBase = base
+            if current.isEmpty { bases.append(base) }
+            current.append(CGPoint(x: x, y: base - (depth[i] - minimum)))
         }
-        if open { close() }
+        if !current.isEmpty { runs.append(current) }
+
+        var fill = Path(), crust = Path()
+        for (run, base) in zip(runs, bases) {
+            guard let first = run.first, let last = run.last else { continue }
+            // On the Dock the ends round over like a pillow; on the ground they bank down.
+            let capStart = min(8, (base - first.y) * (onLedge ? 0.7 : 1.5) + snow.columnWidth / 2)
+            let capEnd = min(8, (base - last.y) * (onLedge ? 0.7 : 1.5) + snow.columnWidth / 2)
+            fill.move(to: CGPoint(x: first.x - capStart, y: base))
+            fill.addQuadCurve(to: first, control: CGPoint(x: first.x - capStart, y: first.y))
+            crust.move(to: first)
+            for k in 0..<(run.count - 1) {
+                let mid = CGPoint(x: (run[k].x + run[k + 1].x) / 2, y: (run[k].y + run[k + 1].y) / 2)
+                fill.addQuadCurve(to: mid, control: run[k])
+                crust.addQuadCurve(to: mid, control: run[k])
+            }
+            fill.addLine(to: last)
+            crust.addLine(to: last)
+            fill.addQuadCurve(to: CGPoint(x: last.x + capEnd, y: base), control: CGPoint(x: last.x + capEnd, y: last.y))
+            fill.closeSubpath()
+        }
         guard !fill.isEmpty else { return }
         // A soft blue shadow under a bright crust, like fresh snow.
         let shade = SkyColor(c.r * 0.78, c.g * 0.84, c.b * 0.95)
@@ -123,7 +130,7 @@ struct WeatherLook {
         ctx.fill(fill, with: .linearGradient(Gradient(colors: [Self.color(c), Self.color(shade)]),
                                              startPoint: CGPoint(x: 0, y: bounds.minY),
                                              endPoint: CGPoint(x: 0, y: bounds.maxY)))
-        ctx.stroke(crust, with: .color(Self.color(SkyColor(1, 1, 1), 0.25 * daylight + 0.1)), lineWidth: 0.8)
+        ctx.stroke(crust, with: .color(Self.color(SkyColor(1, 1, 1), 0.18 * daylight + 0.06)), lineWidth: 0.6)
     }
 
     /// Raindrops splashing on a surface: little crowns of droplets and a ripple, at random
