@@ -247,3 +247,40 @@ final class NightSkyTests: XCTestCase {
         XCTAssertLessThan(Galactic.milkyWayBrightness(longitude: 0, latitude: 40), 0.05)
     }
 }
+
+final class MoonImageTests: XCTestCase {
+    /// A plain grey surface map is enough to check lighting and transparency.
+    private let renderer = MoonImageRenderer(
+        surface: RGBAImage(width: 8, height: 4, pixels: [UInt8](repeating: 180, count: 8 * 4 * 4)))
+
+    private func pixel(_ img: RGBAImage, _ x: Int, _ y: Int) -> (r: Int, a: Int) {
+        let o = (y * img.width + x) * 4
+        return (Int(img.pixels[o]), Int(img.pixels[o + 3]))
+    }
+
+    func testCornersAreTransparent() {
+        let img = renderer.render(size: 64, phaseAngle: 0, sunAngle: 0, northAngle: -.pi / 2)
+        XCTAssertEqual(pixel(img, 0, 0).a, 0)
+        XCTAssertEqual(pixel(img, 32, 32).a, 255)
+    }
+
+    func testFirstQuarterIsLitTowardsTheSun() {
+        // Sun to the right of the Moon on screen.
+        let img = renderer.render(size: 64, phaseAngle: 90, sunAngle: 0, northAngle: -.pi / 2)
+        XCTAssertGreaterThan(pixel(img, 52, 32).r, 100)  // right half lit
+        XCTAssertLessThan(pixel(img, 12, 32).r, 25)      // left half in earthshine
+    }
+
+    func testFullMoonIsEvenlyBright() {
+        // Lommel–Seeliger: no limb darkening at full Moon.
+        let img = renderer.render(size: 64, phaseAngle: 0, sunAngle: 0, northAngle: -.pi / 2)
+        XCTAssertEqual(Double(pixel(img, 32, 32).r), Double(pixel(img, 58, 32).r), accuracy: 4)
+    }
+
+    func testDarkSideIsTransparentByDay() {
+        let img = renderer.render(size: 64, phaseAngle: 90, sunAngle: 0, northAngle: -.pi / 2,
+                                  earthshine: 0, darkSideOpacity: 0)
+        XCTAssertLessThan(pixel(img, 12, 32).a, 10)
+        XCTAssertEqual(pixel(img, 52, 32).a, 255)
+    }
+}

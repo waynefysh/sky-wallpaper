@@ -1,5 +1,6 @@
 #if canImport(AppKit)
 import SwiftUI
+import ImageIO
 import SkyCore
 
 /// The live sky: redraws at the chosen frame rate behind the desktop icons.
@@ -16,7 +17,8 @@ struct SkyView: View {
                 let fov = caches.fieldOfView(scene: scene)
                 let background = caches.background(scene: scene, size: size, fov: fov)
                 SkyPainter(scene: scene, size: size, time: timeline.date.timeIntervalSinceReferenceDate,
-                           fov: fov, background: background).paint(&ctx)
+                           fov: fov, background: background,
+                           moonImage: caches.moonImage(scene: scene, size: size, fov: fov)).paint(&ctx)
             }
         }
         .ignoresSafeArea()
@@ -28,10 +30,12 @@ struct StillSkyView: View {
     let scene: SkyScene
     let fov: Double
     let background: CGImage?
+    var moonImage: CGImage? = nil
 
     var body: some View {
         Canvas { ctx, size in
-            SkyPainter(scene: scene, size: size, time: 0, fov: fov, background: background).paint(&ctx)
+            SkyPainter(scene: scene, size: size, time: 0, fov: fov, background: background,
+                       moonImage: moonImage).paint(&ctx)
         }
     }
 }
@@ -71,6 +75,22 @@ final class SkyCaches {
         return scene
     }
 
+    private var moonKey: (phase: Double, sun: Double, north: Double, daylight: Double, pixels: Int)?
+    private var moonCG: CGImage?
+
+    /// The Moon disc changes slowly: re-render when its phase or orientation moves noticeably.
+    func moonImage(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
+        guard let layout = MoonLayout(scene: scene, size: size, fov: fov) else { return nil }
+        let key = (layout.phaseAngle, layout.sunAngle, layout.northAngle, layout.daylight, layout.pixels)
+        if let k = moonKey, abs(k.phase - key.0) < 0.3, abs(k.sun - key.1) < 0.02, abs(k.north - key.2) < 0.02,
+           abs(k.daylight - key.3) < 0.05, k.pixels == key.4, let img = moonCG {
+            return img
+        }
+        moonCG = layout.render()
+        moonKey = key
+        return moonCG
+    }
+
     func background(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
         if let k = backgroundKey, abs(scene.date.timeIntervalSince(k.date)) < 2, k.size == size,
            k.observer == scene.observer, k.weather == scene.weather, let img = backgroundImage {
@@ -103,12 +123,83 @@ enum SkyBackground {
     }
 }
 
+/// Where and how the Moon sits on screen, shared by the renderer and the painter.
+struct MoonLayout {
+    static let radiusFraction = 0.016 // of the screen width; larger than life so the surface reads
+    let center: CGPoint
+    let radius: Double
+    let phaseAngle: Double
+    /// Screen directions (atan2 with y down) of the Sun and of lunar (≈ celestial) north.
+    let sunAngle: Double
+    let northAngle: Double
+    let daylight: Double
+    let pixels: Int
+
+    init?(scene: SkyScene, size: CGSize, fov: Double) {
+        let m = scene.moon
+        let pr = SkyBackground.projection(for: scene, size: size, fov: fov)
+        guard m.horizontal.altitude > -1, let p = pr.point(m.horizontal) else { return nil }
+        func raw(_ h: HorizontalCoordinates) -> CGPoint {
+            let dAz = AstroMath.normalizeSigned(h.azimuth - pr.facingAzimuth)
+            return CGPoint(x: (dAz / pr.horizontalFOV + 0.5) * size.width,
+                           y: (1 - (h.altitude - pr.lowestAltitude) / (pr.highestAltitude - pr.lowestAltitude)) * size.height)
+        }
+        center = CGPoint(x: p.x, y: p.y)
+        radius = size.width * Self.radiusFraction
+        phaseAngle = m.phaseAngle
+        let s = raw(scene.sun.horizontal)
+        sunAngle = atan2(s.y - center.y, s.x - center.x)
+        let jd = AstroMath.julianDay(scene.date)
+        let n = raw(scene.observer.horizontal(rightAscension: m.rightAscension,
+                                              declination: min(89.9, m.declination + 1), jd: jd))
+        let m0 = raw(scene.observer.horizontal(rightAscension: m.rightAscension, declination: m.declination, jd: jd))
+        northAngle = atan2(n.y - m0.y, n.x - m0.x)
+        daylight = max(0, min(1, (scene.sun.horizontal.altitude + 4) / 10))
+        pixels = max(16, Int(radius * 4)) // 2× for Retina
+    }
+
+    func render() -> CGImage? {
+        guard let surface = MoonTexture.surface else { return nil }
+        let img = MoonImageRenderer(surface: surface).render(
+            size: pixels, phaseAngle: phaseAngle, sunAngle: sunAngle, northAngle: northAngle,
+            earthshine: 0.06 * (1 - daylight), darkSideOpacity: 1 - daylight)
+        guard let provider = CGDataProvider(data: Data(img.pixels) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return CGImage(width: img.width, height: img.height, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: img.width * 4, space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
+}
+
+/// The NASA LRO colour map, decoded once into RGBA.
+enum MoonTexture {
+    static let surface: RGBAImage? = {
+        guard let url = MoonSurface.bundledMapURL,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let w = cg.width, h = cg.height
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: w * 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return drawn ? RGBAImage(width: w, height: h, pixels: pixels) : nil
+    }()
+}
+
 struct SkyPainter {
     let scene: SkyScene
     let size: CGSize
     let time: TimeInterval
     let fov: Double
     let background: CGImage?
+    /// The textured, phase-lit Moon disc, if the surface map loaded.
+    var moonImage: CGImage? = nil
 
     private var projection: SkyProjection { SkyBackground.projection(for: scene, size: size, fov: fov) }
     private var overcast: Double {
@@ -197,7 +288,7 @@ struct SkyPainter {
     private func paintMoon(_ ctx: inout GraphicsContext) {
         let m = scene.moon
         guard m.horizontal.altitude > -1, let p = point(m.horizontal) else { return }
-        let r = size.width * 0.010
+        let r = size.width * MoonLayout.radiusFraction
         let k = m.illuminatedFraction
         let daylight = max(0, min(1, (scene.sun.horizontal.altitude + 4) / 10))
         let visible = (1 - overcast * 0.95) * (1 - 0.55 * daylight)
@@ -209,7 +300,20 @@ struct SkyPainter {
         ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: halo * 2, height: halo * 2)),
                  with: .radialGradient(Gradient(colors: [color(lit, 0.28 * k * visible * (1 - daylight)), color(lit, 0)]),
                                        center: p, startRadius: r, endRadius: halo))
-        // Dark side: earthshine at night, sky colour by day.
+        if let moonImage {
+            // Real surface, lit for the phase; reddened and dimmed near the horizon.
+            var layer = ctx
+            layer.opacity = visible
+            layer.draw(Image(decorative: moonImage, scale: 1).interpolation(.high).resizable(),
+                       in: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
+            if lowWarmth > 0.01 {
+                layer.blendMode = .multiply
+                layer.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
+                           with: .color(color(SkyColor(1, 0.78, 0.55), lowWarmth * 0.8)))
+            }
+            return
+        }
+        // Fallback without the surface map. Dark side: earthshine at night, sky colour by day.
         ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
                  with: .color(color(SkyColor(0.30, 0.33, 0.40), 0.18 * visible * (1 - daylight))))
 

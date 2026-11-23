@@ -29,6 +29,8 @@ Your own wallpaper is put back when Sky quits.
 
 ![London at night: Milky Way on 12 August, full Moon on 23 November 2026](Docs/london-night-sky.png)
 
+![The Moon through its phases](Docs/moon-phases.png)
+
 ## Layout
 
 | Path | What it is |
@@ -39,6 +41,7 @@ Your own wallpaper is put back when Sky quits.
 | `Sources/SkyCore/Weather.swift` | `WeatherProvider` protocol, Open-Meteo client, caching `WeatherService` |
 | `Sources/SkyCore/Atmosphere.swift` | Preetham daylight sky model, screen projection, low-res sky background renderer |
 | `Sources/SkyCore/Moon.swift` | Moon position (Meeus ch. 47) and phase (ch. 48) |
+| `Sources/SkyCore/MoonImage.swift` | Renders the Moon as a lit sphere from the NASA surface map |
 | `Sources/SkyCore/Planets.swift` | Mercury to Saturn from JPL Keplerian elements; galactic coordinates and Milky Way brightness |
 | `Sources/SkyCore/SkyScene.swift` | Combines sun, stars and weather into one frame's scene and sky colours |
 | `Sources/SkyWallpaper/` | The app: live desktop windows, still-image wallpaper mode, renderer, settings |
@@ -56,6 +59,7 @@ is not applied yet (under 0.1° for every bright star over a century, invisible 
 
 Star data: Yale Bright Star Catalogue, 5th revised edition (Hoffleit & Warren 1991, CDS V/50),
 converted from the JSON transcription at github.com/brettonw/YaleBrightStarCatalog.
+Moon surface: NASA LRO colour map, [NASA Scientific Visualization Studio 4720](https://svs.gsfc.nasa.gov/4720) (public domain).
 Weather: [Open-Meteo](https://open-meteo.com/), free for non-commercial use (CC BY 4.0 attribution).
 
 ## Roadmap
@@ -63,6 +67,6 @@ Weather: [Open-Meteo](https://open-meteo.com/), free for non-commercial use (CC 
 1. Scaffold, astronomy and weather model (this commit)
 2. Daytime sky: Preetham scattering model, sun disc, display modes (merged)
 3. Seasonal view width: wide enough to show sunrise and sunset all year (merged)
-4. Night sky: Moon with phase, planets, Milky Way, twilight on the Sun's side (this branch)
+4. Night sky: Moon with phase, planets, Milky Way, twilight on the Sun's side (merged); realistic textured Moon (this branch)
 5. Weather in Metal: volumetric-looking cloud layers lit by the Sun, rain on glass, fog, lightning
 6. Multi-display, power saving, launch at login, still-image mode
