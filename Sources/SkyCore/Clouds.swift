@@ -129,7 +129,7 @@ public struct CloudRenderer: Sendable {
     }
 
     /// Colour of sunlight after its path through the air at a given (apparent) altitude.
-    static func sunlightColor(altitude: Double) -> SkyColor {
+    public static func sunlightColor(altitude: Double) -> SkyColor {
         let h = max(-1.5, altitude)
         let airmass = 1 / (AstroMath.sind(max(0.01, h + 1.6)) + 0.50572 * pow(h + 1.6 + 6.07995, -1.6364))
         let k = min(airmass, 40)

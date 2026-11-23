@@ -298,6 +298,7 @@ struct SkyPainter {
         paintMoon(&ctx)
         let flash = scene.weather.isThunderstorm ? Lightning.flash(at: time, activity: 0.6) : nil
         paintClouds(&ctx, flash: flash)
+        paintSunThroughCloud(&ctx)
         paintLightning(&ctx, flash: flash)
         paintPrecipitation(&ctx)
         if let effects {
@@ -423,32 +424,85 @@ struct SkyPainter {
         ctx.fill(shape.applying(transform), with: .color(color(lit, visible)))
     }
 
-    /// The Sun: a twilight glow (the daylight model already brightens the sky around the Sun),
-    /// a soft bloom, and a limb-darkened disc that reddens near the horizon.
+    /// The Sun's light colour, brightest channel 1: white overhead, orange near the horizon.
+    var sunLight: SkyColor {
+        let c = CloudRenderer.sunlightColor(altitude: scene.sun.horizontal.altitude)
+        let m = max(c.r, c.g, c.b, 1e-6)
+        return SkyColor(c.r / m, c.g / m, c.b / m)
+    }
+
+    /// The Sun as a camera or eye sees it: an over-exposed disc with a soft edge (no visible
+    /// limb darkening), a tight glare and a wide faint aureole, all added as light so they
+    /// brighten the sky rather than paint over it. Near the horizon it turns orange and
+    /// refraction squashes it a little. Clouds are drawn on top and hide it as they thicken.
     private func paintSun(_ ctx: inout GraphicsContext) {
         guard let p = point(scene.sun.horizontal) else { return }
         let h = scene.sun.horizontal.altitude
-        let warmth = max(0, min(1, 1 - h / 12))
-        let tint = SkyColor.mix(SkyColor(1, 0.97, 0.90), SkyColor(1, 0.50, 0.22), warmth)
-        let visible = 1 - overcast * 0.9
+        let light = sunLight
 
+        // Twilight glow on the Sun's side of the sky, around sunrise and sunset.
         let twilight = 1 - max(0, min(1, (h - 2) / 8))
         let glowR = size.width * (0.12 + 0.18 * scene.sunGlow)
         if twilight > 0 {
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - glowR, y: p.y - glowR, width: glowR * 2, height: glowR * 2)),
-                     with: .radialGradient(Gradient(colors: [color(tint, 0.5 * visible * twilight), color(tint, 0)]),
+                     with: .radialGradient(Gradient(colors: [color(light, 0.35 * twilight), color(light, 0)]),
                                            center: p, startRadius: 0, endRadius: glowR))
         }
         guard h > -1.5 else { return }
+        let warmth = max(0, min(1, 1 - h / 15))
         let r = size.width * 0.007
-        let bloom = r * 6
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - bloom, y: p.y - bloom, width: bloom * 2, height: bloom * 2)),
-                 with: .radialGradient(Gradient(colors: [color(tint, 0.6 * visible), color(tint, 0)]),
-                                       center: p, startRadius: r, endRadius: bloom))
-        let limb = SkyColor(tint.r * 0.92, tint.g * 0.80, tint.b * 0.65)
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                 with: .radialGradient(Gradient(colors: [color(SkyColor(1, 1, 0.97), visible), color(limb, visible)]),
-                                       center: p, startRadius: 0, endRadius: r))
+        var glow = ctx
+        glow.blendMode = .plusLighter
+
+        // Aureole: exp(−d / 5r), out to 20 r.
+        let aureole = r * 20
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - aureole, y: p.y - aureole, width: aureole * 2, height: aureole * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(light, 0.35), location: 0),
+                      .init(color: color(light, 0.13), location: 0.25),
+                      .init(color: color(light, 0.05), location: 0.5),
+                      .init(color: color(light, 0.017), location: 0.75),
+                      .init(color: color(light, 0), location: 1),
+                  ]), center: p, startRadius: 0, endRadius: aureole))
+        // Glare: exp(−(d / 1.8r)²), out to 4 r; weaker for the low Sun so its disc stands out.
+        let glare = r * 4, g = 0.6 - 0.3 * warmth
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - glare, y: p.y - glare, width: glare * 2, height: glare * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(light, g), location: 0),
+                      .init(color: color(light, g * 0.78), location: 0.225),
+                      .init(color: color(light, g * 0.37), location: 0.45),
+                      .init(color: color(light, g * 0.105), location: 0.675),
+                      .init(color: color(light, g * 0.018), location: 0.9),
+                      .init(color: color(light, 0), location: 1),
+                  ]), center: p, startRadius: 0, endRadius: glare))
+        // The disc: near white, tinted only when low, with a soft 8% edge.
+        var core = SkyColor.mix(SkyColor(1, 1, 1), light, 0.5 * warmth)
+        let m = max(core.r, core.g, core.b)
+        core = SkyColor(core.r / m, core.g / m, core.b / m)
+        let flat = 1 - 0.18 * max(0, min(1, (4 - h) / 4))
+        let disc = CGRect(x: p.x - r, y: p.y - r * flat, width: r * 2, height: r * 2 * flat)
+        glow.fill(Path(ellipseIn: disc), with: .radialGradient(Gradient(stops: [
+            .init(color: color(core, 0.9), location: 0),
+            .init(color: color(core, 0.9), location: 0.92),
+            .init(color: color(core, 0), location: 1),
+        ]), center: p, startRadius: 0, endRadius: r))
+    }
+
+    /// Behind cloud the Sun is a brighter, diffuse patch rather than a disc.
+    func paintSunThroughCloud(_ ctx: inout GraphicsContext) {
+        guard clouds != nil, overcast > 0.05, let p = point(scene.sun.horizontal) else { return }
+        let h = scene.sun.horizontal.altitude
+        guard h > -1 else { return }
+        let strength = 0.28 * min(1, overcast * 1.5) * max(0, min(1, (h + 1) / 4))
+        let reach = size.width * 0.007 * 14
+        var glow = ctx
+        glow.blendMode = .plusLighter
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - reach, y: p.y - reach, width: reach * 2, height: reach * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(sunLight, strength), location: 0),
+                      .init(color: color(sunLight, strength * 0.4), location: 0.3),
+                      .init(color: color(sunLight, 0), location: 1),
+                  ]), center: p, startRadius: 0, endRadius: reach))
     }
 
     /// Deterministic pseudo-random number in [0, 1) for element `i`.
