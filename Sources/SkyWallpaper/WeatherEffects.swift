@@ -76,10 +76,12 @@ final class WeatherEffectsStore {
                 fx.setShelf(nil)
                 continue
             }
-            // To this screen's top-left coordinates.
+            // To this screen's top-left coordinates. The icon list's frame starts a few points
+            // above the visible glass of the shelf, so snow settles that much lower.
+            let inset = DockLocator.shelfInset
             fx.setShelf(CGRect(x: shelf.minX - screen.frame.minX,
-                               y: screen.frame.maxY - shelf.maxY,
-                               width: shelf.width, height: shelf.height))
+                               y: screen.frame.maxY - shelf.maxY + inset,
+                               width: shelf.width, height: max(0, shelf.height - inset)))
         }
     }
 }
@@ -95,6 +97,9 @@ extension NSScreen {
 /// how wide the Dock is; without permission the Dock effects stay off.
 enum DockLocator {
     static var isTrusted: Bool { AXIsProcessTrusted() }
+
+    /// Points between the top of the Dock's icon list and the top edge of its glass shelf.
+    static let shelfInset = 4.0
 
     /// Shows the system prompt that leads to the Accessibility setting.
     static func requestAccess() {

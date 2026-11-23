@@ -63,41 +63,46 @@ struct WeatherLook {
                    onLedge: Bool, offset: CGPoint = .zero) {
         guard snow.totalSnow > 0.5 else { return }
         let c = snowColor
-        var path = Path()
+        // Only a real layer of snow is drawn: a sprinkle thinner than this would show as a
+        // hard line along the shelf or the bottom of the screen.
+        let minimum = 0.8
+        var fill = Path(), crust = Path()
         var open = false
-        var lastX = 0.0
+        var lastX = 0.0, lastBase = 0.0
+        func close() {
+            fill.addLine(to: CGPoint(x: lastX + snow.columnWidth / 2, y: lastBase))
+            fill.closeSubpath()
+            open = false
+        }
         for i in 0..<snow.columnCount {
             let isLedge = snow.floor[i] > 0
             let x = (Double(i) + 0.5) * snow.columnWidth - offset.x
-            guard isLedge == onLedge, snow.depth[i] > 0.05 else {
-                if open {
-                    path.addLine(to: CGPoint(x: lastX + snow.columnWidth / 2, y: screenHeight - snow.floor[max(0, i - 1)] - offset.y))
-                    path.closeSubpath()
-                    open = false
-                }
+            guard isLedge == onLedge, snow.depth[i] > minimum else {
+                if open { close() }
                 continue
             }
             let base = screenHeight - snow.floor[i] - offset.y
-            let top = base - snow.depth[i]
+            // Taper from nothing at the start of a patch, so it rises out of the surface.
+            let top = base - (snow.depth[i] - minimum)
             if !open {
-                path.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
-                path.addLine(to: CGPoint(x: x - snow.columnWidth / 2, y: top))
+                fill.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
+                crust.move(to: CGPoint(x: x - snow.columnWidth / 2, y: base))
                 open = true
             }
-            path.addLine(to: CGPoint(x: x, y: top))
+            fill.addLine(to: CGPoint(x: x, y: top))
+            crust.addLine(to: CGPoint(x: x, y: top))
             lastX = x
+            lastBase = base
         }
-        if open {
-            path.addLine(to: CGPoint(x: lastX + snow.columnWidth / 2, y: screenHeight - snow.floor[snow.columnCount - 1] - offset.y))
-            path.closeSubpath()
-        }
+        if open { close() }
+        guard !fill.isEmpty else { return }
         // A soft blue shadow under a bright crust, like fresh snow.
         let shade = SkyColor(c.r * 0.78, c.g * 0.84, c.b * 0.95)
-        let bounds = path.boundingRect
-        ctx.fill(path, with: .linearGradient(Gradient(colors: [Self.color(c), Self.color(shade)]),
+        let bounds = fill.boundingRect
+        ctx.fill(fill, with: .linearGradient(Gradient(colors: [Self.color(c), Self.color(shade)]),
                                              startPoint: CGPoint(x: 0, y: bounds.minY),
                                              endPoint: CGPoint(x: 0, y: bounds.maxY)))
-        ctx.stroke(path, with: .color(Self.color(SkyColor(1, 1, 1), 0.25 * daylight + 0.1)), lineWidth: 0.8)
+        ctx.stroke(crust, with: .color(Self.color(SkyColor(1, 1, 1), 0.25 * daylight + 0.1)), lineWidth: 0.8)
     }
 
     /// Raindrops splashing on a surface: little crowns of droplets and a ripple, at random
