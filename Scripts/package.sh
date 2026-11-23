@@ -15,13 +15,14 @@
 #      INSTALLER_ID="3rd Party Mac Developer Installer: Your Name (TEAMID)" \
 #      PROFILE=~/Downloads/Sky_Mac_App_Store.provisionprofile Scripts/package.sh
 #
-# Other settings: VERSION (default 1.0), BUNDLE_ID (default com.waynefysh.sky; must match
+# Other settings: VERSION (default 1.0), BUILD (default: the commit count), BUNDLE_ID (default com.waynefysh.sky; must match
 # the App ID in your developer account), UNIVERSAL=1 for an Intel + Apple silicon build.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:-1.0}"
-BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# The build number must go up with every App Store upload; set BUILD to upload the same commit again.
+BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 BUNDLE_ID="${BUNDLE_ID:-com.waynefysh.sky}"
 SIGN_ID="${SIGN_ID:--}"           # "-" signs ad hoc
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -30,6 +31,8 @@ DIST=dist
 APP="$DIST/Sky.app"
 
 BUILD_ARGS=(-c release)
+# App Store builds run on Intel and Apple silicon unless UNIVERSAL=0.
+if [[ "$APP_STORE" == 1 ]]; then UNIVERSAL="${UNIVERSAL:-1}"; fi
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then BUILD_ARGS+=(--arch arm64 --arch x86_64); fi
 if [[ "$APP_STORE" == 1 ]]; then
     : "${TEAM_ID:?Set TEAM_ID for an App Store build}"
