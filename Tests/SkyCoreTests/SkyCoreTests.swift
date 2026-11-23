@@ -258,6 +258,13 @@ final class MoonImageTests: XCTestCase {
         return (Int(img.pixels[o]), Int(img.pixels[o + 3]))
     }
 
+    func testBundledMoonMapIsPackaged() throws {
+        let url = try XCTUnwrap(MoonSurface.bundledMapURL)
+        let data = try Data(contentsOf: url)
+        XCTAssertGreaterThan(data.count, 100_000)
+        XCTAssertEqual(Array(data.prefix(3)), [0xFF, 0xD8, 0xFF]) // JPEG signature
+    }
+
     func testCornersAreTransparent() {
         let img = renderer.render(size: 64, phaseAngle: 0, sunAngle: 0, northAngle: -.pi / 2)
         XCTAssertEqual(pixel(img, 0, 0).a, 0)
