@@ -66,9 +66,13 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
+# Files downloaded from the web (such as the provisioning profile) carry com.apple.quarantine,
+# which the App Store rejects (error 91109). Signing seals extended attributes, so clear them first.
+xattr -cr "$APP"
 echo "==> Signing ($([[ "$SIGN_ID" == "-" ]] && echo "ad hoc" || echo "$SIGN_ID"))"
 if [[ "$APP_STORE" == 1 ]]; then
     cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
+    xattr -cr "$APP"
     ENT="$(mktemp -d)/Sky.entitlements"
     cp Resources/AppStore.entitlements "$ENT"
     /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $TEAM_ID.$BUNDLE_ID" "$ENT"
