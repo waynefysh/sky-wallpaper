@@ -239,8 +239,24 @@ struct MoonLayout {
         center = CGPoint(x: p.x, y: p.y)
         radius = size.width * Self.radiusFraction
         phaseAngle = m.phaseAngle
-        let s = raw(scene.sun.horizontal)
-        sunAngle = atan2(s.y - center.y, s.x - center.x)
+        // Aim the lit side along the great circle towards the Sun, not a straight screen line:
+        // take a 1° step from the Moon towards the Sun across the sky and see where it lands.
+        func vec(_ h: HorizontalCoordinates) -> (Double, Double, Double) {
+            let ca = AstroMath.cosd(h.altitude)
+            return (ca * AstroMath.sind(h.azimuth), ca * AstroMath.cosd(h.azimuth), AstroMath.sind(h.altitude))
+        }
+        let mv = vec(m.horizontal), sv = vec(scene.sun.horizontal)
+        let dot = mv.0 * sv.0 + mv.1 * sv.1 + mv.2 * sv.2
+        var tx = sv.0 - dot * mv.0, ty = sv.1 - dot * mv.1, tz = sv.2 - dot * mv.2 // towards the Sun
+        let tn = max(1e-9, (tx * tx + ty * ty + tz * tz).squareRoot())
+        (tx, ty, tz) = (tx / tn, ty / tn, tz / tn)
+        let step = 1.0 * AstroMath.deg2rad
+        let qx = mv.0 * cos(step) + tx * sin(step), qy = mv.1 * cos(step) + ty * sin(step)
+        let qz = mv.2 * cos(step) + tz * sin(step)
+        let toward = HorizontalCoordinates(altitude: AstroMath.asind(max(-1, min(1, qz))),
+                                           azimuth: AstroMath.normalize(AstroMath.atan2d(qx, qy)))
+        let s = raw(toward), here = raw(m.horizontal)
+        sunAngle = atan2(s.y - here.y, s.x - here.x)
         let jd = AstroMath.julianDay(scene.date)
         let n = raw(scene.observer.horizontal(rightAscension: m.rightAscension,
                                               declination: min(89.9, m.declination + 1), jd: jd))
