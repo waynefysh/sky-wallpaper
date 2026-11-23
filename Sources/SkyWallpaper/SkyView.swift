@@ -327,39 +327,77 @@ struct SkyPainter {
         ctx.fill(Path(rect), with: .color(color(SkyColor(0.55 * dim, 0.58 * dim, 0.62 * dim), overcast * 0.45)))
     }
 
+    /// Draws one point of light as the eye sees it: a tiny core, plus a soft glow that grows
+    /// with brightness, added as light. Faint stars look white; only bright ones show colour.
+    private func paintPointLight(_ ctx: inout GraphicsContext, at p: CGPoint, magnitude m: Double,
+                                 color tint: SkyColor, opacity: Double, isPlanet: Bool = false) {
+        let flux = pow(10, -0.4 * (m - 1)) // 1 for a first-magnitude star
+        let root = min(4, flux.squareRoot())
+        let saturation = min(1, 0.2 + 0.5 * root)
+        let c = SkyColor.mix(SkyColor(1, 1, 1), tint, saturation)
+        if flux > 0.12 {
+            let glow = min(isPlanet ? 14 : 9, 2.2 + 3.2 * root)
+            let a = opacity * min(0.55, 0.2 * root) * (isPlanet ? 1.3 : 1)
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - glow, y: p.y - glow, width: glow * 2, height: glow * 2)),
+                     with: .radialGradient(Gradient(stops: [
+                         .init(color: color(c, a), location: 0),
+                         .init(color: color(c, a * 0.35), location: 0.25),
+                         .init(color: color(c, a * 0.08), location: 0.6),
+                         .init(color: color(c, 0), location: 1),
+                     ]), center: p, startRadius: 0, endRadius: glow))
+        }
+        let core = (isPlanet ? 0.9 : 0.5) + 0.35 * min(2.5, root)
+        let alpha = opacity * min(1, 0.18 + 0.82 * root)
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - core, y: p.y - core, width: core * 2, height: core * 2)),
+                 with: .radialGradient(Gradient(colors: [color(SkyColor.mix(c, SkyColor(1, 1, 1), 0.5), alpha),
+                                                         color(c, alpha * 0.6), color(c, 0)]),
+                                       center: p, startRadius: 0, endRadius: core * 1.25))
+    }
+
+    /// Air near the horizon dims and reddens light: extra magnitudes of extinction.
+    private func extinction(altitude: Double) -> Double {
+        let h = max(0.5, altitude)
+        return 0.22 * (1 / AstroMath.sind(h + 244 / (165 + 47 * pow(h, 1.1))) - 1) * 0.5
+    }
+
     private func paintStars(_ ctx: inout GraphicsContext) {
         let fade = scene.starVisibility * (1 - overcast)
         guard fade > 0.01 else { return }
+        var light = ctx
+        light.blendMode = .plusLighter
         for s in scene.stars {
             guard let p = point(s.horizontal) else { continue }
-            let m = s.star.magnitude
-            let radius = max(0.5, 2.8 - 0.42 * m)
-            // Twinkle more near the horizon, where we look through more air.
-            let air = 1 - max(0, min(1, s.horizontal.altitude / 40))
-            let twinkle = 1 - 0.35 * air * (0.5 + 0.5 * sin(time * (3 + Double(s.star.hr % 7)) + Double(s.star.hr)))
-            let alpha = fade * twinkle * max(0.15, min(1, (6.8 - m) / 5))
+            let alt = s.horizontal.altitude
+            // Scintillation: stronger and faster low down, where we look through more air.
+            let air = 1 - max(0, min(1, alt / 45))
+            let seed = Double(s.star.hr)
+            let flicker = sin(time * (4.1 + Double(s.star.hr % 7)) + seed) * sin(time * (2.3 + Double(s.star.hr % 5) * 0.7) + seed * 0.3)
+            let twinkle = 0.25 + 0.55 * air
+            let m = s.star.magnitude + extinction(altitude: alt) - twinkle * 0.6 * flicker
             let c = blackBodyColor(kelvin: s.star.temperature)
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
-                     with: .color(Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: alpha)))
+            paintPointLight(&light, at: p, magnitude: m, color: SkyColor(c.red, c.green, c.blue),
+                            opacity: fade * smoothstep01((alt + 0.5) / 3))
         }
     }
 
-    /// Planets: steady (no twinkle), slightly larger than stars of the same brightness,
-    /// and showing earlier in twilight, so Venus can be the "evening star".
+    /// Planets: a steady light (no twinkle), a little larger than a star of the same brightness,
+    /// and out earlier in twilight, so Venus can be the "evening star".
     private func paintPlanets(_ ctx: inout GraphicsContext) {
         let fade = min(1, scene.starVisibility * 1.8) * (1 - overcast)
         guard fade > 0.01 else { return }
+        var light = ctx
+        light.blendMode = .plusLighter
         for pl in scene.planets where pl.horizontal.altitude > -0.5 {
             guard let p = point(pl.horizontal) else { continue }
-            let radius = max(1.2, 3.4 - 0.45 * pl.magnitude)
-            let c = pl.planet.color
-            let glow = radius * 3
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - glow, y: p.y - glow, width: glow * 2, height: glow * 2)),
-                     with: .radialGradient(Gradient(colors: [color(c, 0.35 * fade), color(c, 0)]),
-                                           center: p, startRadius: 0, endRadius: glow))
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
-                     with: .color(color(c, fade)))
+            let m = pl.magnitude + extinction(altitude: pl.horizontal.altitude)
+            paintPointLight(&light, at: p, magnitude: m, color: pl.planet.color,
+                            opacity: fade * smoothstep01((pl.horizontal.altitude + 0.5) / 3), isPlanet: true)
         }
+    }
+
+    private func smoothstep01(_ x: Double) -> Double {
+        let t = max(0, min(1, x))
+        return t * t * (3 - 2 * t)
     }
 
     /// Screen position without the off-screen cut-off, used for directions (e.g. towards the Sun).
@@ -448,11 +486,19 @@ struct SkyPainter {
                      with: .radialGradient(Gradient(colors: [color(light, 0.35 * twilight), color(light, 0)]),
                                            center: p, startRadius: 0, endRadius: glowR))
         }
-        guard h > -1.5 else { return }
-        let warmth = max(0, min(1, 1 - h / 15))
         let r = size.width * 0.007
+        // The horizon line on screen. The disc sinks behind it at sunset and rises from it at
+        // sunrise, dimming and reddening through the thick air low down, rather than switching.
+        let horizonY = projection.point(HorizontalCoordinates(altitude: 0, azimuth: scene.sun.horizontal.azimuth))?.y ?? size.height
+        guard p.y - r * 4 < horizonY else { return }
+        let raw = CloudRenderer.sunlightColor(altitude: h)
+        let brightness = max(0.3, min(1, raw.r)) * smoothstep01((h + 2.5) / 3)
+        guard brightness > 0.005 else { return }
+        let warmth = max(0, min(1, 1 - h / 15))
         var glow = ctx
         glow.blendMode = .plusLighter
+        glow.opacity = brightness
+        glow.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: horizonY + r * 0.15)))
 
         // Aureole: exp(−d / 5r), out to 20 r.
         let aureole = r * 20
