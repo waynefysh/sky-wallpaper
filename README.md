@@ -31,6 +31,28 @@ Your own wallpaper is put back when Sky quits.
 
 ![The Moon through its phases](Docs/moon-phases.png)
 
+## Weather
+
+Clouds come in three decks (cirrus at 9 km, altocumulus at 4 km, cumulus at 1.4 km) with the
+cover Open-Meteo reports for each. Every pixel is a ray that meets each deck where its plane
+crosses it on a curved Earth, so clouds crowd towards the horizon as real ones do. They are lit
+by the Sun, or the Moon at night, with self-shadowing and a silver lining towards the light, and
+high cloud stays pink after sunset because it still sees the Sun. Low visibility adds fog banks.
+Thunderstorms flash in several strokes, light the cloud from inside and sometimes strike the ground.
+
+Drops land on the glass, cling, then run down in fits and starts once they are big enough,
+swallowing drops in their way. On the desktop each drop shows the sky behind it upside down.
+Rain splashes along the bottom of the screen and on the Dock; snow settles there, slides off the
+ends of the Dock, and melts when it warms up (the reported snow depth sets how much is already lying).
+
+Settings choose where drops go (**off**, **on the desktop**, the default, or **over all windows**),
+whether rain and snow touch the Dock, and a **Preview weather** menu to try every effect now.
+Finding the Dock needs Accessibility access (System Settings > Privacy & Security > Accessibility),
+because macOS has no other way to tell an app how wide the Dock is. The Dock effects are drawn
+on a click-through window just above the Dock, so clicks still reach it.
+
+![Clouds: scattered at noon, sunset, after sunset, overcast, morning fog, overcast night](Docs/weather-clouds.png)
+
 ## Layout
 
 | Path | What it is |
@@ -43,6 +65,10 @@ Your own wallpaper is put back when Sky quits.
 | `Sources/SkyCore/Moon.swift` | Moon position (Meeus ch. 47) and phase (ch. 48) |
 | `Sources/SkyCore/MoonImage.swift` | Renders the Moon as a lit sphere from the NASA surface map |
 | `Sources/SkyCore/Planets.swift` | Mercury to Saturn from JPL Keplerian elements; galactic coordinates and Milky Way brightness |
+| `Sources/SkyCore/Clouds.swift` | Gradient noise, cloud decks, cloud and fog renderer |
+| `Sources/SkyCore/GlassRain.swift` | Drops on the glass: landing, sliding, merging, trails, drying |
+| `Sources/SkyCore/SnowCover.swift` | Snow lying on the ground and on the Dock's shelf |
+| `Sources/SkyCore/Lightning.swift` | Flash timing and forked bolt shapes |
 | `Sources/SkyCore/SkyScene.swift` | Combines sun, stars and weather into one frame's scene and sky colours |
 | `Sources/SkyWallpaper/` | The app: live desktop windows, still-image wallpaper mode, renderer, settings |
 | `Scripts/build_star_catalog.py` | Regenerates `Resources/bsc5.csv` from the catalogue JSON |
@@ -67,6 +93,6 @@ Weather: [Open-Meteo](https://open-meteo.com/), free for non-commercial use (CC 
 1. Scaffold, astronomy and weather model (this commit)
 2. Daytime sky: Preetham scattering model, sun disc, display modes (merged)
 3. Seasonal view width: wide enough to show sunrise and sunset all year (merged)
-4. Night sky: Moon with phase, planets, Milky Way, twilight on the Sun's side (merged); realistic textured Moon (this branch)
-5. Weather in Metal: volumetric-looking cloud layers lit by the Sun, rain on glass, fog, lightning
+4. Night sky: Moon with phase, planets, Milky Way, twilight on the Sun's side; realistic textured Moon (merged)
+5. Weather: sunlit cloud decks, fog, lightning, rain on the glass, splashes and snow on the Dock (this branch)
 6. Multi-display, power saving, launch at login, still-image mode
