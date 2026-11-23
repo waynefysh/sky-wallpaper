@@ -24,11 +24,67 @@ public struct WeatherConditions: Equatable, Sendable, Codable {
     /// WMO weather interpretation code as reported.
     public var weatherCode: Int
     public var observedAt: Date
+    /// Snow lying on the ground, metres (0 if none or unknown).
+    public var snowDepth: Double = 0
 
     public static let clear = WeatherConditions(
         cloudLow: 0, cloudMid: 0, cloudHigh: 0, precipitation: .none, precipitationRate: 0,
         isThunderstorm: false, windSpeed: 2, windDirection: 270, visibility: 30_000,
         temperature: 15, weatherCode: 0, observedAt: .distantPast)
+}
+
+extension WeatherConditions {
+    /// Ready-made conditions for previewing the weather effects from Settings.
+    public enum Sample: String, CaseIterable, Sendable {
+        case clear, fairWeatherClouds, overcast, showers, rain, thunderstorm, snow, fog
+
+        public var title: String {
+            switch self {
+            case .clear: return "Clear"
+            case .fairWeatherClouds: return "Scattered clouds"
+            case .overcast: return "Overcast"
+            case .showers: return "Sunshine and showers"
+            case .rain: return "Rain"
+            case .thunderstorm: return "Thunderstorm"
+            case .snow: return "Snow"
+            case .fog: return "Fog"
+            }
+        }
+    }
+
+    public static func sample(_ kind: Sample) -> WeatherConditions {
+        var w = WeatherConditions.clear
+        switch kind {
+        case .clear: break
+        case .fairWeatherClouds:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.35, 0.15, 0.3, 5)
+            w.weatherCode = 2
+        case .overcast:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.95, 0.6, 0.2, 6)
+            w.weatherCode = 3
+            w.visibility = 15_000
+        case .showers:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.4, 0.25, 0.2, 6)
+            (w.precipitation, w.precipitationRate, w.weatherCode) = (.rain, 2, 80)
+            w.visibility = 15_000
+        case .rain:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.9, 0.7, 0.3, 7)
+            (w.precipitation, w.precipitationRate, w.weatherCode) = (.rain, 3, 63)
+            w.visibility = 8_000
+        case .thunderstorm:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.85, 0.9, 0.5, 11)
+            (w.precipitation, w.precipitationRate, w.weatherCode, w.isThunderstorm) = (.rain, 8, 95, true)
+            w.visibility = 5_000
+        case .snow:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.9, 0.6, 0.2, 3)
+            (w.precipitation, w.precipitationRate, w.weatherCode) = (.snow, 1.5, 73)
+            (w.temperature, w.visibility, w.snowDepth) = (-1, 3_000, 0.04)
+        case .fog:
+            (w.cloudLow, w.cloudMid, w.cloudHigh, w.windSpeed) = (0.3, 0, 0, 1)
+            (w.weatherCode, w.visibility, w.temperature) = (45, 400, 6)
+        }
+        return w
+    }
 }
 
 /// A source of current weather. Open-Meteo is the default; WeatherKit can be added later.
@@ -48,7 +104,7 @@ public struct OpenMeteoProvider: WeatherProvider {
     static let fields = [
         "temperature_2m", "precipitation", "rain", "showers", "snowfall", "weather_code",
         "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
-        "wind_speed_10m", "wind_direction_10m", "visibility",
+        "wind_speed_10m", "wind_direction_10m", "visibility", "snow_depth",
     ]
 
     public func requestURL(for observer: Observer) -> URL {
@@ -87,6 +143,7 @@ public struct OpenMeteoProvider: WeatherProvider {
             var wind_speed_10m: Double?
             var wind_direction_10m: Double?
             var visibility: Double?
+            var snow_depth: Double?
         }
         var current: Current
     }
@@ -107,7 +164,8 @@ public struct OpenMeteoProvider: WeatherProvider {
             visibility: c.visibility,
             temperature: c.temperature_2m ?? 15,
             weatherCode: code,
-            observedAt: Date(timeIntervalSince1970: c.time)
+            observedAt: Date(timeIntervalSince1970: c.time),
+            snowDepth: max(0, c.snow_depth ?? 0)
         )
     }
 

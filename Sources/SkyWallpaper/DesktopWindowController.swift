@@ -34,7 +34,7 @@ final class DesktopWindowController {
         w.hasShadow = false
         w.backgroundColor = .black
         w.isReleasedWhenClosed = false
-        w.contentView = NSHostingView(rootView: SkyView().environmentObject(model))
+        w.contentView = NSHostingView(rootView: SkyView(screenID: screen.displayID).environmentObject(model))
         w.setFrame(screen.frame, display: true)
         return w
     }

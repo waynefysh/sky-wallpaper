@@ -4,21 +4,31 @@ import ImageIO
 import SkyCore
 
 /// The live sky: redraws at the chosen frame rate behind the desktop icons.
-/// Clouds and precipitation move to a Metal shader in a later milestone.
 struct SkyView: View {
     @EnvironmentObject var model: SkyModel
+    /// The screen this view fills, so rain on the glass and snow are kept per screen.
+    let screenID: CGDirectDisplayID
     @State private var caches = SkyCaches()
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / model.frameRate)) { timeline in
             Canvas { ctx, size in
                 let date = timeline.date.addingTimeInterval(model.previewOffset)
-                let scene = caches.scene(model: model, date: date)
+                let now = timeline.date.timeIntervalSinceReferenceDate
+                let weather = model.effectiveWeather
+                let scene = caches.scene(model: model, date: date, weather: weather)
                 let fov = caches.fieldOfView(scene: scene)
                 let background = caches.background(scene: scene, size: size, fov: fov)
-                SkyPainter(scene: scene, size: size, time: timeline.date.timeIntervalSinceReferenceDate,
-                           fov: fov, background: background,
-                           moonImage: caches.moonImage(scene: scene, size: size, fov: fov)).paint(&ctx)
+                let effects = model.effects.screen(screenID, size: size)
+                effects.advance(to: now, weather: weather, glass: model.glassMode != .off, snowSpeed: model.snowSpeed)
+                var painter = SkyPainter(scene: scene, size: size, time: now, fov: fov, background: background,
+                                         moonImage: caches.moonImage(scene: scene, size: size, fov: fov))
+                painter.clouds = caches.clouds(scene: scene, size: size, fov: fov, now: now)
+                painter.rainbow = caches.rainbow(scene: scene, size: size, fov: fov)
+                painter.effects = effects.snapshot
+                painter.glassOnDesktop = model.glassMode == .desktop
+                painter.backgroundPixels = caches.backgroundPixels
+                painter.paint(&ctx)
             }
         }
         .ignoresSafeArea()
@@ -31,11 +41,16 @@ struct StillSkyView: View {
     let fov: Double
     let background: CGImage?
     var moonImage: CGImage? = nil
+    var clouds: CGImage? = nil
+    var rainbow: CGImage? = nil
 
     var body: some View {
         Canvas { ctx, size in
-            SkyPainter(scene: scene, size: size, time: 0, fov: fov, background: background,
-                       moonImage: moonImage).paint(&ctx)
+            var painter = SkyPainter(scene: scene, size: size, time: 0, fov: fov, background: background,
+                                     moonImage: moonImage)
+            painter.clouds = clouds.map { CloudFrames(previous: nil, current: $0, mix: 1) }
+            painter.rainbow = rainbow
+            painter.paint(&ctx)
         }
     }
 }
@@ -51,6 +66,71 @@ final class SkyCaches {
     private var backgroundImage: CGImage?
     private var fovKey: (day: Date, observer: Observer)?
     private var fov: Double = 140
+    private var starsWeather: WeatherConditions?
+    /// The sky background's pixels, for drops on the glass to refract.
+    private(set) var backgroundPixels: (pixels: [UInt8], width: Int, height: Int)?
+
+    // Clouds are rendered off the main thread about twice a second and cross-faded.
+    private let epoch = Date.timeIntervalSinceReferenceDate
+    private var cloudCurrent: CGImage?
+    private var cloudPrevious: CGImage?
+    private var cloudArrivedAt = 0.0
+    /// How long each cross-fade lasts: the time the last render took to arrive, so the fade
+    /// finishes as the next one lands instead of holding still and then jumping.
+    private var cloudFade = 0.5
+    private var cloudStartedAt = -100.0
+    private var cloudRendering = false
+    private var cloudKey: (size: CGSize, observer: Observer, weather: WeatherConditions)?
+    static let cloudInterval = 0.5
+
+    private var rainbowKey: (date: Date, size: CGSize, weather: WeatherConditions, fov: Double)?
+    private var rainbowImage: CGImage?
+
+    /// The rainbow moves with the Sun, so it is redrawn every few seconds of sky time.
+    func rainbow(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
+        if let k = rainbowKey, abs(scene.date.timeIntervalSince(k.date)) < 5, k.size == size,
+           k.weather == scene.weather, k.fov == fov {
+            return rainbowImage
+        }
+        rainbowKey = (scene.date, size, scene.weather, fov)
+        let (w, h) = CloudFrames.resolution(for: size)
+        rainbowImage = Rainbow.render(scene: scene, projection: SkyBackground.projection(for: scene, size: size, fov: fov),
+                                      width: w, height: h)?.cgImage
+        return rainbowImage
+    }
+
+    func clouds(scene: SkyScene, size: CGSize, fov: Double, now: TimeInterval) -> CloudFrames? {
+        let changed = cloudKey.map { $0.size != size || $0.observer != scene.observer || $0.weather != scene.weather } ?? true
+        if let key = cloudKey, key.size != size {
+            cloudPrevious = nil // the old render no longer fits the screen
+        }
+        if !cloudRendering, changed || now - cloudStartedAt >= Self.cloudInterval {
+            cloudRendering = true
+            cloudStartedAt = now
+            cloudKey = (size, scene.observer, scene.weather)
+            let projection = SkyBackground.projection(for: scene, size: size, fov: fov)
+            let (w, h) = CloudFrames.resolution(for: size)
+            let windTime = now - epoch
+            Task.detached(priority: .userInitiated) { [weak self, scene] in
+                let image = CloudRenderer().render(scene: scene, projection: projection, width: w, height: h, time: windTime)
+                await self?.cloudsArrived(image)
+            }
+        }
+        guard let cloudCurrent else { return nil }
+        return CloudFrames(previous: cloudPrevious, current: cloudCurrent,
+                           mix: min(1, (now - cloudArrivedAt) / cloudFade))
+    }
+
+    private func cloudsArrived(_ image: RGBAImage) {
+        cloudRendering = false
+        let arrived = Date.timeIntervalSinceReferenceDate
+        if cloudCurrent != nil {
+            cloudFade = max(Self.cloudInterval, min(3, arrived - cloudArrivedAt))
+        }
+        cloudPrevious = cloudCurrent
+        cloudCurrent = image.cgImage
+        cloudArrivedAt = arrived
+    }
 
     /// Field of view for the scene's day, recomputed once per local day or when the location changes.
     func fieldOfView(scene: SkyScene) -> Double {
@@ -61,11 +141,12 @@ final class SkyCaches {
         return fov
     }
 
-    func scene(model: SkyModel, date: Date) -> SkyScene {
+    func scene(model: SkyModel, date: Date, weather: WeatherConditions) -> SkyScene {
         let builder = SkySceneBuilder(observer: model.observer, catalog: model.catalog)
-        var scene = builder.scene(at: date, weather: model.weather, includeStars: false)
-        if abs(date.timeIntervalSince(starsAt)) > 5 {
-            let full = builder.scene(at: date, weather: model.weather, includeStars: true)
+        var scene = builder.scene(at: date, weather: weather, includeStars: false)
+        if abs(date.timeIntervalSince(starsAt)) > 5 || weather != starsWeather {
+            starsWeather = weather
+            let full = builder.scene(at: date, weather: weather, includeStars: true)
             stars = full.stars
             planets = full.planets
             starsAt = date
@@ -96,7 +177,10 @@ final class SkyCaches {
            k.observer == scene.observer, k.weather == scene.weather, let img = backgroundImage {
             return img
         }
-        backgroundImage = SkyBackground.image(scene: scene, size: size, fov: fov)
+        let (w, h) = SkyBackground.resolution
+        let bytes = SkyBackground.pixels(scene: scene, size: size, fov: fov)
+        backgroundImage = SkyBackground.image(pixels: bytes)
+        backgroundPixels = (bytes, w, h)
         backgroundKey = (scene.date, size, scene.observer, scene.weather)
         return backgroundImage
     }
@@ -111,10 +195,18 @@ enum SkyBackground {
                       horizontalFOV: fov)
     }
 
-    static func image(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
+    static func pixels(scene: SkyScene, size: CGSize, fov: Double) -> [UInt8] {
         let (w, h) = resolution
-        let bytes = SkyGradientRenderer().render(scene: scene, projection: projection(for: scene, size: size, fov: fov),
-                                                 width: w, height: h)
+        return SkyGradientRenderer().render(scene: scene, projection: projection(for: scene, size: size, fov: fov),
+                                            width: w, height: h)
+    }
+
+    static func image(scene: SkyScene, size: CGSize, fov: Double) -> CGImage? {
+        image(pixels: pixels(scene: scene, size: size, fov: fov))
+    }
+
+    static func image(pixels bytes: [UInt8]) -> CGImage? {
+        let (w, h) = resolution
         guard let provider = CGDataProvider(data: Data(bytes) as CFData),
               let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
@@ -147,8 +239,24 @@ struct MoonLayout {
         center = CGPoint(x: p.x, y: p.y)
         radius = size.width * Self.radiusFraction
         phaseAngle = m.phaseAngle
-        let s = raw(scene.sun.horizontal)
-        sunAngle = atan2(s.y - center.y, s.x - center.x)
+        // Aim the lit side along the great circle towards the Sun, not a straight screen line:
+        // take a 1° step from the Moon towards the Sun across the sky and see where it lands.
+        func vec(_ h: HorizontalCoordinates) -> (Double, Double, Double) {
+            let ca = AstroMath.cosd(h.altitude)
+            return (ca * AstroMath.sind(h.azimuth), ca * AstroMath.cosd(h.azimuth), AstroMath.sind(h.altitude))
+        }
+        let mv = vec(m.horizontal), sv = vec(scene.sun.horizontal)
+        let dot = mv.0 * sv.0 + mv.1 * sv.1 + mv.2 * sv.2
+        var tx = sv.0 - dot * mv.0, ty = sv.1 - dot * mv.1, tz = sv.2 - dot * mv.2 // towards the Sun
+        let tn = max(1e-9, (tx * tx + ty * ty + tz * tz).squareRoot())
+        (tx, ty, tz) = (tx / tn, ty / tn, tz / tn)
+        let step = 1.0 * AstroMath.deg2rad
+        let qx = mv.0 * cos(step) + tx * sin(step), qy = mv.1 * cos(step) + ty * sin(step)
+        let qz = mv.2 * cos(step) + tz * sin(step)
+        let toward = HorizontalCoordinates(altitude: AstroMath.asind(max(-1, min(1, qz))),
+                                           azimuth: AstroMath.normalize(AstroMath.atan2d(qx, qy)))
+        let s = raw(toward), here = raw(m.horizontal)
+        sunAngle = atan2(s.y - here.y, s.x - here.x)
         let jd = AstroMath.julianDay(scene.date)
         let n = raw(scene.observer.horizontal(rightAscension: m.rightAscension,
                                               declination: min(89.9, m.declination + 1), jd: jd))
@@ -200,9 +308,18 @@ struct SkyPainter {
     let background: CGImage?
     /// The textured, phase-lit Moon disc, if the surface map loaded.
     var moonImage: CGImage? = nil
+    /// The cloud and fog layer, cross-fading between renders.
+    var clouds: CloudFrames? = nil
+    /// A rainbow opposite the Sun in showers, added as light.
+    var rainbow: CGImage? = nil
+    /// Rain on the glass and lying snow for this screen (live view only).
+    var effects: WeatherSnapshot? = nil
+    /// Draw drops on the glass here (rather than on the overlay, or not at all).
+    var glassOnDesktop = false
+    var backgroundPixels: (pixels: [UInt8], width: Int, height: Int)? = nil
 
-    private var projection: SkyProjection { SkyBackground.projection(for: scene, size: size, fov: fov) }
-    private var overcast: Double {
+    var projection: SkyProjection { SkyBackground.projection(for: scene, size: size, fov: fov) }
+    var overcast: Double {
         max(scene.weather.cloudLow, scene.weather.cloudMid * 0.8, scene.weather.cloudHigh * 0.4)
     }
 
@@ -216,12 +333,26 @@ struct SkyPainter {
         paintPlanets(&ctx)
         paintSun(&ctx)
         paintMoon(&ctx)
-        paintClouds(&ctx)
+        let flash = scene.weather.isThunderstorm ? Lightning.flash(at: time, activity: 0.6) : nil
+        paintClouds(&ctx, flash: flash)
+        paintSunThroughCloud(&ctx)
+        paintSunInFog(&ctx)
+        if let rainbow {
+            var bow = ctx
+            bow.blendMode = .plusLighter
+            bow.draw(Image(decorative: rainbow, scale: 1).interpolation(.high).resizable(),
+                     in: CGRect(origin: .zero, size: size))
+        }
+        paintLightning(&ctx, flash: flash)
         paintPrecipitation(&ctx)
-        paintLightning(&ctx)
+        if let effects {
+            paintGroundSnow(&ctx, snow: effects.snow)
+            paintGroundSplashes(&ctx, effects: effects)
+            if glassOnDesktop { paintGlass(&ctx, glass: effects.glass, refracting: true) }
+        }
     }
 
-    private func color(_ c: SkyColor, _ opacity: Double = 1) -> Color {
+    func color(_ c: SkyColor, _ opacity: Double = 1) -> Color {
         Color(.sRGB, red: c.r, green: c.g, blue: c.b, opacity: opacity)
     }
 
@@ -237,42 +368,80 @@ struct SkyPainter {
         // Overcast skies flatten towards grey, dimmer as the light fades.
         guard overcast > 0.02 else { return }
         let dim = max(0.05, min(1, (scene.sun.horizontal.altitude + 8) / 20))
-        ctx.fill(Path(rect), with: .color(color(SkyColor(0.55 * dim, 0.58 * dim, 0.62 * dim), overcast * 0.85)))
+        ctx.fill(Path(rect), with: .color(color(SkyColor(0.55 * dim, 0.58 * dim, 0.62 * dim), overcast * 0.45)))
+    }
+
+    /// Draws one point of light as the eye sees it: a tiny core, plus a soft glow that grows
+    /// with brightness, added as light. Faint stars look white; only bright ones show colour.
+    private func paintPointLight(_ ctx: inout GraphicsContext, at p: CGPoint, magnitude m: Double,
+                                 color tint: SkyColor, opacity: Double, isPlanet: Bool = false) {
+        let flux = pow(10, -0.4 * (m - 1)) // 1 for a first-magnitude star
+        let root = min(4, flux.squareRoot())
+        let saturation = min(1, 0.2 + 0.5 * root)
+        let c = SkyColor.mix(SkyColor(1, 1, 1), tint, saturation)
+        if flux > 0.12 {
+            let glow = min(isPlanet ? 14 : 9, 2.2 + 3.2 * root)
+            let a = opacity * min(0.55, 0.2 * root) * (isPlanet ? 1.3 : 1)
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - glow, y: p.y - glow, width: glow * 2, height: glow * 2)),
+                     with: .radialGradient(Gradient(stops: [
+                         .init(color: color(c, a), location: 0),
+                         .init(color: color(c, a * 0.35), location: 0.25),
+                         .init(color: color(c, a * 0.08), location: 0.6),
+                         .init(color: color(c, 0), location: 1),
+                     ]), center: p, startRadius: 0, endRadius: glow))
+        }
+        let core = (isPlanet ? 0.9 : 0.5) + 0.35 * min(2.5, root)
+        let alpha = opacity * min(1, 0.18 + 0.82 * root)
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - core, y: p.y - core, width: core * 2, height: core * 2)),
+                 with: .radialGradient(Gradient(colors: [color(SkyColor.mix(c, SkyColor(1, 1, 1), 0.5), alpha),
+                                                         color(c, alpha * 0.6), color(c, 0)]),
+                                       center: p, startRadius: 0, endRadius: core * 1.25))
+    }
+
+    /// Air near the horizon dims and reddens light: extra magnitudes of extinction.
+    private func extinction(altitude: Double) -> Double {
+        let h = max(0.5, altitude)
+        return 0.22 * (1 / AstroMath.sind(h + 244 / (165 + 47 * pow(h, 1.1))) - 1) * 0.5
     }
 
     private func paintStars(_ ctx: inout GraphicsContext) {
         let fade = scene.starVisibility * (1 - overcast)
         guard fade > 0.01 else { return }
+        var light = ctx
+        light.blendMode = .plusLighter
         for s in scene.stars {
             guard let p = point(s.horizontal) else { continue }
-            let m = s.star.magnitude
-            let radius = max(0.5, 2.8 - 0.42 * m)
-            // Twinkle more near the horizon, where we look through more air.
-            let air = 1 - max(0, min(1, s.horizontal.altitude / 40))
-            let twinkle = 1 - 0.35 * air * (0.5 + 0.5 * sin(time * (3 + Double(s.star.hr % 7)) + Double(s.star.hr)))
-            let alpha = fade * twinkle * max(0.15, min(1, (6.8 - m) / 5))
+            let alt = s.horizontal.altitude
+            // Scintillation: stronger and faster low down, where we look through more air.
+            let air = 1 - max(0, min(1, alt / 45))
+            let seed = Double(s.star.hr)
+            let flicker = sin(time * (4.1 + Double(s.star.hr % 7)) + seed) * sin(time * (2.3 + Double(s.star.hr % 5) * 0.7) + seed * 0.3)
+            let twinkle = 0.25 + 0.55 * air
+            let m = s.star.magnitude + extinction(altitude: alt) - twinkle * 0.6 * flicker
             let c = blackBodyColor(kelvin: s.star.temperature)
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
-                     with: .color(Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: alpha)))
+            paintPointLight(&light, at: p, magnitude: m, color: SkyColor(c.red, c.green, c.blue),
+                            opacity: fade * smoothstep01((alt + 0.5) / 3))
         }
     }
 
-    /// Planets: steady (no twinkle), slightly larger than stars of the same brightness,
-    /// and showing earlier in twilight, so Venus can be the "evening star".
+    /// Planets: a steady light (no twinkle), a little larger than a star of the same brightness,
+    /// and out earlier in twilight, so Venus can be the "evening star".
     private func paintPlanets(_ ctx: inout GraphicsContext) {
         let fade = min(1, scene.starVisibility * 1.8) * (1 - overcast)
         guard fade > 0.01 else { return }
+        var light = ctx
+        light.blendMode = .plusLighter
         for pl in scene.planets where pl.horizontal.altitude > -0.5 {
             guard let p = point(pl.horizontal) else { continue }
-            let radius = max(1.2, 3.4 - 0.45 * pl.magnitude)
-            let c = pl.planet.color
-            let glow = radius * 3
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - glow, y: p.y - glow, width: glow * 2, height: glow * 2)),
-                     with: .radialGradient(Gradient(colors: [color(c, 0.35 * fade), color(c, 0)]),
-                                           center: p, startRadius: 0, endRadius: glow))
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
-                     with: .color(color(c, fade)))
+            let m = pl.magnitude + extinction(altitude: pl.horizontal.altitude)
+            paintPointLight(&light, at: p, magnitude: m, color: pl.planet.color,
+                            opacity: fade * smoothstep01((pl.horizontal.altitude + 0.5) / 3), isPlanet: true)
         }
+    }
+
+    private func smoothstep01(_ x: Double) -> Double {
+        let t = max(0, min(1, x))
+        return t * t * (3 - 2 * t)
     }
 
     /// Screen position without the off-screen cut-off, used for directions (e.g. towards the Sun).
@@ -296,20 +465,45 @@ struct SkyPainter {
         let lowWarmth = max(0, min(1, 1 - m.horizontal.altitude / 10))
         let lit = SkyColor.mix(SkyColor(0.97, 0.96, 0.92), SkyColor(1.0, 0.80, 0.55), lowWarmth)
 
-        let halo = r * 6
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: halo * 2, height: halo * 2)),
-                 with: .radialGradient(Gradient(colors: [color(lit, 0.28 * k * visible * (1 - daylight)), color(lit, 0)]),
-                                       center: p, startRadius: r, endRadius: halo))
+        // A soft glow that falls away quickly from the limb, added as light, rather than a wide
+        // grey disc. Haze or thin cloud spread it a little further.
+        let haze = min(1, overcast * 1.5 + fogginessForMoon)
+        let halo = r * (4 + 3 * haze)
+        let a = (0.10 + 0.06 * haze) * k * visible * (1 - daylight)
+        var glow = ctx
+        glow.blendMode = .plusLighter
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: halo * 2, height: halo * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(lit, a), location: 0),
+                      .init(color: color(lit, a * 0.45), location: 0.3),
+                      .init(color: color(lit, a * 0.12), location: 0.6),
+                      .init(color: color(lit, 0), location: 1),
+                  ]), center: p, startRadius: r, endRadius: halo))
         if let moonImage {
-            // Real surface, lit for the phase; reddened and dimmed near the horizon.
-            var layer = ctx
-            layer.opacity = visible
-            layer.draw(Image(decorative: moonImage, scale: 1).interpolation(.high).resizable(),
-                       in: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
-            if lowWarmth > 0.01 {
-                layer.blendMode = .multiply
-                layer.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                           with: .color(color(SkyColor(1, 0.78, 0.55), lowWarmth * 0.8)))
+            // Real surface, lit for the phase; warmer near the horizon.
+            let img = Image(decorative: moonImage, scale: 1).interpolation(.high).resizable()
+            let rect = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
+            func moon(_ l: inout GraphicsContext) {
+                l.draw(img, in: rect)
+                if lowWarmth > 0.01 {
+                    // Tint only the Moon's own pixels, never the sky around it.
+                    l.blendMode = .sourceAtop
+                    l.fill(Path(ellipseIn: rect), with: .color(color(SkyColor(1, 0.72, 0.45), lowWarmth * 0.45)))
+                }
+            }
+            // At night it is drawn as a solid body, so its dark side hides the stars behind it.
+            if daylight < 1 {
+                var night = ctx
+                night.opacity = visible * (1 - daylight)
+                night.drawLayer { l in moon(&l) }
+            }
+            // By day the Moon is sunlit rock seen through bright sky: its light adds to the
+            // sky's, so it can only ever look brighter than the sky, never like a shadow.
+            if daylight > 0 {
+                var day = ctx
+                day.blendMode = .plusLighter
+                day.opacity = visible * daylight * 0.8
+                day.drawLayer { l in moon(&l) }
             }
             return
         }
@@ -337,107 +531,142 @@ struct SkyPainter {
         ctx.fill(shape.applying(transform), with: .color(color(lit, visible)))
     }
 
-    /// The Sun: a twilight glow (the daylight model already brightens the sky around the Sun),
-    /// a soft bloom, and a limb-darkened disc that reddens near the horizon.
+    /// The Sun's light colour, brightest channel 1: white overhead, orange near the horizon.
+    var sunLight: SkyColor {
+        let c = CloudRenderer.sunlightColor(altitude: scene.sun.horizontal.altitude)
+        let m = max(c.r, c.g, c.b, 1e-6)
+        return SkyColor(c.r / m, c.g / m, c.b / m)
+    }
+
+    /// The Sun as a camera or eye sees it: an over-exposed disc with a soft edge (no visible
+    /// limb darkening), a tight glare and a wide faint aureole, all added as light so they
+    /// brighten the sky rather than paint over it. Near the horizon it turns orange and
+    /// refraction squashes it a little. Clouds are drawn on top and hide it as they thicken.
     private func paintSun(_ ctx: inout GraphicsContext) {
         guard let p = point(scene.sun.horizontal) else { return }
         let h = scene.sun.horizontal.altitude
-        let warmth = max(0, min(1, 1 - h / 12))
-        let tint = SkyColor.mix(SkyColor(1, 0.97, 0.90), SkyColor(1, 0.50, 0.22), warmth)
-        let visible = 1 - overcast * 0.9
+        let light = sunLight
 
+        // Twilight glow on the Sun's side of the sky, around sunrise and sunset.
         let twilight = 1 - max(0, min(1, (h - 2) / 8))
         let glowR = size.width * (0.12 + 0.18 * scene.sunGlow)
         if twilight > 0 {
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - glowR, y: p.y - glowR, width: glowR * 2, height: glowR * 2)),
-                     with: .radialGradient(Gradient(colors: [color(tint, 0.5 * visible * twilight), color(tint, 0)]),
+                     with: .radialGradient(Gradient(colors: [color(light, 0.35 * twilight * sunClarity), color(light, 0)]),
                                            center: p, startRadius: 0, endRadius: glowR))
         }
-        guard h > -1.5 else { return }
         let r = size.width * 0.007
-        let bloom = r * 6
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - bloom, y: p.y - bloom, width: bloom * 2, height: bloom * 2)),
-                 with: .radialGradient(Gradient(colors: [color(tint, 0.6 * visible), color(tint, 0)]),
-                                       center: p, startRadius: r, endRadius: bloom))
-        let limb = SkyColor(tint.r * 0.92, tint.g * 0.80, tint.b * 0.65)
-        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                 with: .radialGradient(Gradient(colors: [color(SkyColor(1, 1, 0.97), visible), color(limb, visible)]),
-                                       center: p, startRadius: 0, endRadius: r))
+        // The horizon line on screen. The disc sinks behind it at sunset and rises from it at
+        // sunrise, dimming and reddening through the thick air low down, rather than switching.
+        let horizonY = projection.point(HorizontalCoordinates(altitude: 0, azimuth: scene.sun.horizontal.azimuth))?.y ?? size.height
+        guard p.y - r * 4 < horizonY else { return }
+        let raw = CloudRenderer.sunlightColor(altitude: h)
+        let brightness = max(0.3, min(1, raw.r)) * smoothstep01((h + 2.5) / 3)
+        guard brightness > 0.005 else { return }
+        let warmth = max(0, min(1, 1 - h / 15))
+        var glow = ctx
+        glow.blendMode = .plusLighter
+        glow.opacity = brightness * sunClarity
+        glow.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: horizonY + r * 0.15)))
+
+        // Aureole: exp(−d / 5r), out to 20 r.
+        let aureole = r * 20
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - aureole, y: p.y - aureole, width: aureole * 2, height: aureole * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(light, 0.35), location: 0),
+                      .init(color: color(light, 0.13), location: 0.25),
+                      .init(color: color(light, 0.05), location: 0.5),
+                      .init(color: color(light, 0.017), location: 0.75),
+                      .init(color: color(light, 0), location: 1),
+                  ]), center: p, startRadius: 0, endRadius: aureole))
+        // Glare: exp(−(d / 1.8r)²), out to 4 r; weaker for the low Sun so its disc stands out.
+        let glare = r * 4, g = 0.6 - 0.3 * warmth
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - glare, y: p.y - glare, width: glare * 2, height: glare * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(light, g), location: 0),
+                      .init(color: color(light, g * 0.78), location: 0.225),
+                      .init(color: color(light, g * 0.37), location: 0.45),
+                      .init(color: color(light, g * 0.105), location: 0.675),
+                      .init(color: color(light, g * 0.018), location: 0.9),
+                      .init(color: color(light, 0), location: 1),
+                  ]), center: p, startRadius: 0, endRadius: glare))
+        // The disc: near white, tinted only when low, with a soft 8% edge.
+        var core = SkyColor.mix(SkyColor(1, 1, 1), light, 0.5 * warmth)
+        let m = max(core.r, core.g, core.b)
+        core = SkyColor(core.r / m, core.g / m, core.b / m)
+        let flat = 1 - 0.18 * max(0, min(1, (4 - h) / 4))
+        let disc = CGRect(x: p.x - r, y: p.y - r * flat, width: r * 2, height: r * 2 * flat)
+        glow.fill(Path(ellipseIn: disc), with: .radialGradient(Gradient(stops: [
+            .init(color: color(core, 0.9), location: 0),
+            .init(color: color(core, 0.9), location: 0.92),
+            .init(color: color(core, 0), location: 1),
+        ]), center: p, startRadius: 0, endRadius: r))
     }
 
-    /// Simple placeholder clouds: soft blurred puffs in three parallax layers, drifting with the wind.
-    private func paintClouds(_ ctx: inout GraphicsContext) {
+    private var fogginessForMoon: Double { fogginess * 0.5 }
+
+    /// How thick the cloud deck is, 0 (none or broken) ... 1 (a dark rain or storm deck).
+    var cloudThickness: Double {
         let w = scene.weather
+        var t = smoothstep01((max(w.cloudLow, w.cloudMid * 0.8) - 0.6) / 0.4)
+        if w.precipitation != .none { t += 0.3 }
+        if w.isThunderstorm { t += 0.3 }
+        return min(1, t)
+    }
+
+    /// 0 in clear air ... 1 in thick fog.
+    var fogginess: Double {
+        1 - smoothstep01(((scene.weather.visibility ?? 30_000) - 300) / 4_700)
+    }
+
+    /// How much of the Sun's glare gets through: none under a thick deck, little in fog.
+    var sunClarity: Double {
+        pow(1 - cloudThickness, 2) * (1 - 0.85 * fogginess)
+    }
+
+    /// In fog or mist the Sun is a pale white disc you can look straight at, with no glare,
+    /// fading out as the fog thickens.
+    func paintSunInFog(_ ctx: inout GraphicsContext) {
+        let f = fogginess
+        guard f > 0.05, let p = point(scene.sun.horizontal) else { return }
         let h = scene.sun.horizontal.altitude
-        let light = max(0.08, min(1, (h + 6) / 16))
-        let sunset = max(0, 1 - abs(h - 2) / 8)
-        let base = SkyColor.mix(SkyColor(light, light, light * 1.02), SkyColor(1, 0.6, 0.45), sunset * 0.6)
-        let drift = (sin(w.windDirection * .pi / 180) >= 0 ? -1.0 : 1.0) * (0.002 + w.windSpeed * 0.0008)
-
-        let layers: [(cover: Double, band: ClosedRange<Double>, count: Int, scale: Double, speed: Double, salt: Int)] = [
-            (w.cloudHigh, 0.02...0.30, 18, 0.10, 0.4, 1),
-            (w.cloudMid, 0.15...0.50, 22, 0.16, 0.7, 2),
-            (w.cloudLow, 0.35...0.80, 26, 0.24, 1.0, 3),
-        ]
-        for layer in layers where layer.cover > 0.02 {
-            ctx.drawLayer { l in
-                l.addFilter(.blur(radius: size.width * layer.scale * 0.18))
-                let n = Int(Double(layer.count) * layer.cover) + 1
-                for i in 0..<n {
-                    let x = (rand(i, layer.salt) + time * drift * layer.speed).truncatingRemainder(dividingBy: 1.4)
-                    let px = ((x < 0 ? x + 1.4 : x) - 0.2) * size.width
-                    let band = layer.band
-                    let py = (band.lowerBound + rand(i, layer.salt + 10) * (band.upperBound - band.lowerBound)) * size.height
-                    let rw = size.width * layer.scale * (0.6 + rand(i, layer.salt + 20))
-                    let rh = rw * (0.35 + 0.2 * rand(i, layer.salt + 30))
-                    let shade = 0.75 + 0.25 * rand(i, layer.salt + 40)
-                    let c = SkyColor(base.r * shade, base.g * shade, base.b * shade)
-                    l.fill(Path(ellipseIn: CGRect(x: px - rw / 2, y: py - rh / 2, width: rw, height: rh)),
-                           with: .color(color(c, 0.55 + 0.4 * layer.cover)))
-                }
-            }
-        }
+        let vis = scene.weather.visibility ?? 30_000
+        let alpha = f * (1 - cloudThickness) * smoothstep01((vis - 120) / 500) * smoothstep01((h + 0.5) / 4) * 0.75
+        guard alpha > 0.01 else { return }
+        let r = size.width * 0.007
+        let tint = SkyColor.mix(SkyColor(1, 1, 0.97), sunLight, 0.6)
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r * 5, y: p.y - r * 5, width: r * 10, height: r * 10)),
+                 with: .radialGradient(Gradient(colors: [color(tint, alpha * 0.25), color(tint, 0)]),
+                                       center: p, startRadius: r, endRadius: r * 5))
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
+                 with: .radialGradient(Gradient(stops: [
+                     .init(color: color(tint, alpha), location: 0),
+                     .init(color: color(tint, alpha), location: 0.85),
+                     .init(color: color(tint, 0), location: 1),
+                 ]), center: p, startRadius: 0, endRadius: r))
     }
 
-    private func paintPrecipitation(_ ctx: inout GraphicsContext) {
-        let w = scene.weather
-        guard w.precipitation != .none else { return }
-        let isSnow = w.precipitation == .snow
-        let count = Int(min(600, 60 + w.precipitationRate * 120))
-        let slant = -sin(w.windDirection * .pi / 180) * min(0.5, w.windSpeed / 20)
-        let fall = isSnow ? 0.08 : 1.2 // screen heights per second
-        for i in 0..<count {
-            let speed = fall * (0.7 + 0.6 * rand(i, 50))
-            let y = (rand(i, 51) + time * speed).truncatingRemainder(dividingBy: 1.0)
-            var x = rand(i, 52) + slant * y
-            if isSnow { x += 0.01 * sin(time * 1.5 + Double(i)) }
-            let p = CGPoint(x: x * size.width, y: y * size.height)
-            if isSnow {
-                let r = 1.5 + 2 * rand(i, 53)
-                ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                         with: .color(.white.opacity(0.75)))
-            } else {
-                var path = Path()
-                let len = size.height * 0.025
-                path.move(to: p)
-                path.addLine(to: CGPoint(x: p.x - slant * len, y: p.y - len))
-                ctx.stroke(path, with: .color(.white.opacity(0.28)), lineWidth: 1)
-            }
-        }
-    }
-
-    private func paintLightning(_ ctx: inout GraphicsContext) {
-        guard scene.weather.isThunderstorm else { return }
-        let slot = Int(time / 6)
-        guard rand(slot, 90) > 0.7 else { return }
-        let phase = time - Double(slot) * 6
-        let flash = phase < 0.08 ? 0.6 : (phase > 0.16 && phase < 0.22 ? 0.4 : 0)
-        guard flash > 0 else { return }
-        ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white.opacity(flash)))
+    /// Behind cloud the Sun is a brighter, diffuse patch rather than a disc.
+    func paintSunThroughCloud(_ ctx: inout GraphicsContext) {
+        guard clouds != nil, overcast > 0.05, let p = point(scene.sun.horizontal) else { return }
+        let h = scene.sun.horizontal.altitude
+        guard h > -1 else { return }
+        // Bright through thin or broken cloud; under a thick, rainy deck only a faint lighter patch.
+        let strength = (0.28 * min(1, overcast * 1.5) * pow(1 - cloudThickness, 1.5) + 0.05 * cloudThickness)
+            * max(0, min(1, (h + 1) / 4)) * (1 - 0.7 * fogginess)
+        let reach = size.width * 0.007 * 14
+        var glow = ctx
+        glow.blendMode = .plusLighter
+        glow.fill(Path(ellipseIn: CGRect(x: p.x - reach, y: p.y - reach, width: reach * 2, height: reach * 2)),
+                  with: .radialGradient(Gradient(stops: [
+                      .init(color: color(sunLight, strength), location: 0),
+                      .init(color: color(sunLight, strength * 0.4), location: 0.3),
+                      .init(color: color(sunLight, 0), location: 1),
+                  ]), center: p, startRadius: 0, endRadius: reach))
     }
 
     /// Deterministic pseudo-random number in [0, 1) for element `i`.
-    private func rand(_ i: Int, _ salt: Int) -> Double {
+    func rand(_ i: Int, _ salt: Int) -> Double {
         var x = UInt64(bitPattern: Int64(i &* 73_856_093 ^ salt &* 19_349_663))
         x ^= x >> 33; x &*= 0xff51afd7ed558ccd; x ^= x >> 33; x &*= 0xc4ceb9fe1a85ec53; x ^= x >> 33
         return Double(x % 1_000_000) / 1_000_000

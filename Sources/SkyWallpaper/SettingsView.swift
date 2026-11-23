@@ -1,11 +1,13 @@
 #if canImport(AppKit)
 import SwiftUI
+import Combine
 import SkyCore
 
 struct SettingsView: View {
     @EnvironmentObject var model: SkyModel
     @State private var latitude = ""
     @State private var longitude = ""
+    @State private var dockAllowed = DockLocator.isTrusted
 
     var body: some View {
         Form {
@@ -20,14 +22,15 @@ struct SettingsView: View {
                 }
             }
             Section("Preview") {
-                Slider(value: $model.previewOffset, in: -43_200...43_200) {
+                Slider(value: $model.previewSeconds, in: -43_200...43_200) {
                     Text("Shift time ±12 h")
                 }
-                Slider(value: Binding(get: { model.previewOffset / 86_400 },
-                                      set: { model.previewOffset = ($0 * 86_400).rounded() }),
-                       in: -183...183) {
+                Slider(value: $model.previewDays, in: -183...183, step: 1) {
                     Text("Shift date ±6 months")
                 }
+                DatePicker("Preview date and time", selection: Binding(
+                    get: { model.now },
+                    set: { model.previewOffset = $0.timeIntervalSinceNow.rounded() }))
                 Button("Back to now") { model.previewOffset = 0 }
                 Text(sunSummary).font(.caption).foregroundStyle(.secondary)
             }
@@ -43,13 +46,62 @@ struct SettingsView: View {
                     Text("60 fps").tag(60.0)
                 }
             }
+            Section("Weather") {
+                Picker("Rain drops on the glass", selection: $model.glassMode) {
+                    ForEach(GlassMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Toggle("Rain and snow on the Dock", isOn: $model.dockEffects)
+                if model.dockEffects && !dockAllowed {
+                    Text("To find the Dock, Sky needs Accessibility access. Until then, snow settles along the bottom of the screen only.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Allow Accessibility access…") {
+                        DockLocator.requestAccess()
+                    }
+                }
+                Picker("Preview weather", selection: $model.weatherPreview) {
+                    Text("Live weather").tag(WeatherConditions.Sample?.none)
+                    ForEach(WeatherConditions.Sample.allCases, id: \.self) { sample in
+                        Text(sample.title).tag(WeatherConditions.Sample?.some(sample))
+                    }
+                }
+                Text(weatherSummary).font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .onChange(of: model.weatherPreview) { _, preview in
+            // A rainbow stands opposite the Sun, so in this south-facing view it only shows at
+            // some times of day and year: jump the preview to the next one.
+            if preview == .showers,
+               let when = Rainbow.nextChanceInView(observer: model.observer, after: Date()) {
+                model.previewOffset = when.timeIntervalSinceNow.rounded()
+            }
+        }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            dockAllowed = DockLocator.isTrusted
+        }
         .onAppear {
             latitude = String(format: "%.4f", model.observer.latitude)
             longitude = String(format: "%.4f", model.observer.longitude)
         }
+    }
+
+    private var weatherSummary: String {
+        let w = model.weather
+        guard w.observedAt != .distantPast else { return "Waiting for the first weather report." }
+        let t = DateFormatter()
+        t.timeStyle = .short
+        let cloud = Int((max(w.cloudLow, w.cloudMid, w.cloudHigh) * 100).rounded())
+        var parts = ["\(String(format: "%.0f", w.temperature))°C", "cloud \(cloud)%"]
+        if w.precipitation != .none {
+            parts.append("\(w.precipitation.rawValue) \(String(format: "%.1f", w.precipitationRate)) mm/h")
+        }
+        if w.isThunderstorm { parts.append("thunder") }
+        if let v = w.visibility, v < 8_000 { parts.append("visibility \(String(format: "%.1f", v / 1000)) km") }
+        if w.snowDepth > 0 { parts.append("snow lying \(Int(w.snowDepth * 100)) cm") }
+        return "Live report at \(t.string(from: w.observedAt)): " + parts.joined(separator: ", ")
     }
 
     private var sunSummary: String {

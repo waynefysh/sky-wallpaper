@@ -24,13 +24,41 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Where rain drops on the glass are drawn.
+enum GlassMode: String, CaseIterable, Identifiable {
+    case off
+    /// On the wallpaper only, so app windows stay clear (default).
+    case desktop
+    /// On a click-through layer over every window.
+    case everything
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .desktop: return "On the desktop"
+        case .everything: return "Over all windows"
+        }
+    }
+}
+
 /// Shared, observable state for every screen's sky view and the settings window.
 @MainActor
 final class SkyModel: ObservableObject {
     @Published var observer: Observer
     @Published var weather: WeatherConditions = .clear
     /// Added to the real clock, so the settings slider can preview any time of day or year.
-    @Published var previewOffset: TimeInterval = 0
+    /// Whole days and seconds of time of day, kept apart so the two sliders don't fight.
+    @Published var previewDays: Double = 0
+    @Published var previewSeconds: Double = 0
+    var previewOffset: TimeInterval {
+        get { previewDays * 86_400 + previewSeconds }
+        set {
+            let days = (newValue / 86_400).rounded()
+            previewDays = days
+            previewSeconds = newValue - days * 86_400
+        }
+    }
     /// Frames per second for the live view.
     @Published var frameRate: Double = 30
     @Published var displayMode: DisplayMode =
@@ -38,6 +66,28 @@ final class SkyModel: ObservableObject {
         didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: "displayMode") }
     }
 
+    /// Rain drops on the glass: off, on the desktop, or over everything.
+    @Published var glassMode: GlassMode =
+        GlassMode(rawValue: UserDefaults.standard.string(forKey: "glassMode") ?? "") ?? .desktop {
+        didSet { UserDefaults.standard.set(glassMode.rawValue, forKey: "glassMode") }
+    }
+    /// Rain splashing on, and snow settling on, the Dock.
+    @Published var dockEffects: Bool = UserDefaults.standard.object(forKey: "dockEffects") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(dockEffects, forKey: "dockEffects") }
+    }
+    /// Shows sample weather instead of the real weather, to try the effects out.
+    @Published var weatherPreview: WeatherConditions.Sample?
+
+    /// Snow settles and melts in real time with live weather, but 10× faster in a preview.
+    var snowSpeed: Double { weatherPreview == nil ? 1 : 10 }
+
+    /// The weather to draw: the preview if one is chosen, otherwise the real weather.
+    var effectiveWeather: WeatherConditions {
+        weatherPreview.map { WeatherConditions.sample($0) } ?? weather
+    }
+
+    /// Per-screen rain-on-glass and snow state, shared by the wallpaper and the overlay.
+    let effects = WeatherEffectsStore()
     let catalog: StarCatalog? = try? StarCatalog.bundled()
     private let weatherService = WeatherService()
     private var weatherTimer: Timer?
@@ -82,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = SkyModel()
     private var statusItem: NSStatusItem?
     private var desktop: DesktopWindowController?
+    private var overlay: WeatherOverlayController?
     private var still: StillWallpaperController?
     private var settingsWindow: NSWindow?
     private var modeTimer: Timer?
@@ -90,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         desktop = DesktopWindowController(model: model)
+        overlay = WeatherOverlayController(model: model)
         still = StillWallpaperController(model: model)
         model.startWeather()
         applyDisplayMode()
@@ -136,8 +188,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if live {
                 still?.stop()
                 desktop?.showOnAllScreens()
+                overlay?.start()
             } else {
                 desktop?.hide()
+                overlay?.stop()
                 still?.start()
             }
         }
@@ -145,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         if settingsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 460),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 640),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
             w.title = "Sky Settings"
             w.isReleasedWhenClosed = false

@@ -12,7 +12,10 @@ let package = Package(
         // Pure Swift astronomy + weather model. No UI code, so it is testable anywhere.
         .target(
             name: "SkyCore",
-            resources: [.process("Resources")]
+            resources: [.process("Resources")],
+            // The cloud renderer does millions of noise samples a second; keep it optimised
+            // even in debug builds so `swift run` stays smooth.
+            swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]
         ),
         // The macOS menu bar app that draws the sky behind the desktop icons.
         .executableTarget(
